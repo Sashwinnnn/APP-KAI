@@ -1,0 +1,1491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KAI - Kitchen AI</title>
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+   <style>
+    /* Modern Premium Glass UI */
+    .glass-panel {
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(30px);
+        -webkit-backdrop-filter: blur(30px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+    }
+    
+    .liquid-glass-dock {
+        background: rgba(12, 16, 23, 0.85);
+        backdrop-filter: blur(40px);
+        -webkit-backdrop-filter: blur(40px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    }
+
+    .liquid-glass-button {
+        background: rgba(255, 255, 255, 0.06);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.15), 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
+
+    .liquid-glass-button:hover {
+        background: rgba(255, 255, 255, 0.12);
+        border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    .liquid-active-pill {
+        background: rgba(255, 255, 255, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.3), 0 0 15px rgba(255, 255, 255, 0.08);
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 99px;
+    }
+
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(3, 7, 18, 0.85);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        z-index: 150;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+    }
+    .modal-card {
+        background: rgba(18, 22, 32, 0.9);
+        backdrop-filter: blur(40px);
+        -webkit-backdrop-filter: blur(40px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 2rem;
+        padding: 1.75rem;
+        width: 100%;
+        max-width: 28rem;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+    }
+    
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in {
+        animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    .progress-ring__circle {
+        transition: stroke-dashoffset 0.6s ease-in-out;
+        transform: rotate(-90deg);
+        transform-origin: 50% 50%;
+    }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-100 pb-36 min-h-screen flex flex-col items-center selection:bg-slate-700/50">
+
+    <!-- MAIN APP CONTAINER -->
+    <div class="w-full max-w-lg px-6 flex flex-col flex-1">
+
+        <!-- APP HEADER BAR -->
+        <header class="pt-8 pb-4 flex items-center justify-between w-full relative">
+            <div class="w-10"></div>
+            <span class="font-black text-2xl tracking-[0.3em] text-emerald-50 drop-shadow-[0_0_14px_rgba(16,185,129,0.45)] select-none pl-2">
+                KAI
+            </span>
+            <div class="relative inline-block w-10 flex justify-end">
+                <button onclick="toggleNotificationTray()" class="relative p-2.5 rounded-2xl text-slate-300 hover:text-white hover:bg-white/5 transition active:scale-90 focus:outline-none">
+                    <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                    </svg>
+                    <span id="notification-dot" class="hidden absolute top-2 right-2 w-2.5 h-2.5 bg-emerald-400 rounded-full ring-2 ring-slate-950 animate-pulse"></span>
+                </button>
+            </div>
+        </header>
+
+        <!-- UNIVERSAL GLASS ALERT / NOTIFICATION MODAL -->
+        <div id="universal-alert-modal" class="modal-backdrop hidden">
+            <div class="modal-card animate-fade-in space-y-5 text-center">
+                <div id="alert-icon-container" class="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mx-auto text-2xl">
+                    💡
+                </div>
+                <div>
+                    <h3 id="alert-title" class="text-lg font-bold text-white">Notice</h3>
+                    <p id="alert-message" class="text-xs text-slate-300 mt-1.5 leading-relaxed"></p>
+                </div>
+                <div id="alert-actions" class="pt-2 flex gap-3">
+                    <button id="alert-confirm-btn" onclick="closeCustomAlert()" class="w-full bg-white/10 hover:bg-white/20 border border-white/15 text-white py-3 rounded-xl font-bold text-xs transition active:scale-95">
+                        OK
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- FULL-PAGE GLASS ALERTS TRAY -->
+        <div id="notification-tray" class="modal-backdrop hidden transition-all duration-300">
+            <div class="modal-card animate-fade-in w-full max-w-md min-h-[460px] flex flex-col justify-between p-6">
+                <div class="modal-header border-b border-white/10 pb-4">
+                    <div class="flex justify-between items-center">
+                        <span class="text-[10px] font-mono tracking-widest text-slate-400 uppercase">// Alerts</span>
+                        <button onclick="clearAllNotifications()" class="text-[10px] font-bold uppercase text-rose-400 hover:text-rose-300 transition">Clear</button>
+                    </div>
+                    <h2 class="text-white font-bold text-xl mt-2 tracking-tight">System Center</h2>
+                </div>
+                <div id="tray-items-container" class="flex-1 my-4 space-y-3 overflow-y-auto pr-1 text-xs min-h-[240px] max-h-[300px] flex flex-col justify-start">
+                    <div class="my-auto text-center py-12">
+                        <span class="text-2xl block mb-2 opacity-40">🔔</span>
+                        <p class="text-slate-500 text-xs">No active notifications.</p>
+                    </div>
+                </div>
+                <div class="border-t border-white/10 pt-4">
+                    <button onclick="toggleNotificationTray()" class="w-full text-center py-3 rounded-xl font-bold text-xs text-slate-300 hover:text-white transition bg-white/5 border border-white/10">
+                        Dismiss
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- CURRENT SCREEN TITLE -->
+        <section class="py-3 flex justify-center w-full border-b border-white/5 mb-6">
+            <h1 id="screen-title" class="text-lg font-bold tracking-tight text-white transition-all duration-300">My Pantry</h1>
+        </section>
+
+        <!-- MAIN APP CONTENT AREA -->
+        <main class="flex-1 w-full pb-8">
+
+            <!-- TAB 1: HISTORY SCREEN -->
+            <div id="tab-history" class="tab-content">
+                <div class="glass-panel rounded-3xl p-6 space-y-5">
+                    <div class="flex justify-between items-center border-b border-white/5 pb-4">
+                        <div>
+                            <h3 class="font-bold text-base text-white">Cooking History</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">Tap dish to view ingredients & step instructions</p>
+                        </div>
+                        <span class="text-[10px] font-semibold text-slate-300 bg-white/5 px-3 py-1 rounded-full border border-white/10">Log</span>
+                    </div>
+                    <div id="history-log" class="space-y-3.5">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 2: SHOPPING LIST SCREEN -->
+            <div id="tab-shopping" class="tab-content">
+                <div class="glass-panel rounded-3xl p-6 space-y-5">
+                    <div class="flex items-center justify-between border-b border-white/5 pb-4">
+                        <div>
+                            <h3 class="font-bold text-base text-white">Shopping List</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">Manage items to buy & balance budget</p>
+                        </div>
+                        <button onclick="checkoutShoppingList()" class="bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30 px-3.5 py-2 rounded-xl text-xs font-bold transition active:scale-95 flex items-center gap-1.5">
+                            <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                            Move Checked
+                        </button>
+                    </div>
+
+                    <div class="flex gap-2.5">
+                        <input type="text" id="shopping-input" placeholder="Add item (e.g., Almond Milk)..." class="flex-1 bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-500 transition">
+                        <button onclick="addShoppingItem()" class="liquid-glass-button text-white px-5 rounded-xl font-bold text-xs active:scale-95 transition">Add</button>
+                    </div>
+
+                    <div class="bg-white/[0.02] border border-white/10 rounded-2xl p-3.5 flex items-center justify-between gap-3">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-slate-400 font-mono">$</span>
+                            <input type="number" id="budget-input" placeholder="Budget $" class="w-24 bg-black/40 border border-white/10 focus:border-white/20 rounded-xl px-3 py-1.5 text-xs text-white text-center outline-none">
+                        </div>
+                        <button onclick="trimShoppingListWithAI()" class="liquid-glass-button text-slate-200 font-bold text-xs px-4 py-2 rounded-xl transition active:scale-95 flex items-center gap-1.5">
+                            <span>AI Trim</span> ✨
+                        </button>
+                    </div>
+
+                    <div id="shopping-list-container" class="space-y-2.5 pt-2"></div>
+                </div>
+            </div>
+
+            <!-- TAB 3: PANTRY DASHBOARD SCREEN -->
+            <div id="tab-dashboard" class="tab-content active">
+                <div class="space-y-6">
+                    <div id="section-expired" class="hidden">
+                        <h4 class="text-[10px] font-bold text-rose-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span> Expired Items
+                        </h4>
+                        <div id="list-expired" class="space-y-2.5"></div>
+                    </div>
+                    <div id="section-soon" class="hidden">
+                        <h4 class="text-[10px] font-bold text-amber-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-amber-400"></span> Expiring Soon
+                        </h4>
+                        <div id="list-soon" class="space-y-2.5"></div>
+                    </div>
+                    <div id="section-fresh" class="hidden">
+                        <h4 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400"></span> Fresh Inventory
+                        </h4>
+                        <div id="list-fresh" class="space-y-2.5"></div>
+                    </div>
+                    <div id="pantry-empty" class="hidden text-center py-14 glass-panel rounded-3xl">
+                        <div class="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mx-auto mb-3.5">
+                            <svg class="w-7 h-7 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                        </div>
+                        <p class="text-base font-bold text-white">Your pantry is empty</p>
+                        <p class="text-xs text-slate-400 mt-1 max-w-xs mx-auto">Tap <span class="text-white font-semibold">Capture</span> below to scan items or upload receipts.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 4: KAI AI SCREEN -->
+            <div id="tab-kai" class="tab-content">
+                <div class="glass-panel rounded-3xl p-5 flex flex-col h-[520px]">
+                    <div class="border-b border-white/5 pb-3.5 mb-3.5 flex items-center gap-3">
+                        <div class="relative w-9 h-9 bg-white/5 rounded-2xl border border-white/10 flex items-center justify-center shrink-0 text-sm">
+                            🤖
+                        </div>
+                        <div>
+                            <p class="font-bold text-sm text-white">KAI Assistant</p>
+                            <p class="text-[11px] text-slate-400">Recipe ideas, storage tips, and ingredient pairing</p>
+                        </div>
+                    </div>
+                    <div id="chat-messages" class="flex-1 overflow-y-auto space-y-3.5 pr-1.5 text-xs flex flex-col">
+                        <div class="bg-white/[0.03] rounded-2xl p-3.5 border border-white/5 text-slate-300 max-w-[88%] self-start leading-relaxed">
+                            Hello! I am KAI, your smart kitchen partner. 🧑‍🍳 Ask me anything about your pantry or request custom recipes.
+                        </div>
+                    </div>
+                    <div class="mt-3.5 pt-3.5 border-t border-white/5 flex gap-2.5">
+                        <input type="text" id="chat-input" placeholder="Ask KAI anything..." class="flex-1 bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-500 transition">
+                        <button onclick="sendChatMessage()" class="liquid-glass-button text-white font-bold text-xs px-5 rounded-xl transition duration-150 active:scale-95">
+                            Send
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 5: SAVINGS DASHBOARD SCREEN -->
+            <div id="tab-stats" class="tab-content">
+                <div id="savings-dashboard" class="space-y-4"></div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- CAPTURE OPTION MODAL -->
+    <div id="capture-choice-modal" class="modal-backdrop hidden">
+        <div class="modal-card animate-fade-in w-full max-w-sm space-y-4">
+            <div class="flex justify-between items-center pb-2 border-b border-white/10">
+                <div>
+                    <h2 class="text-base font-bold text-white">Capture Mode</h2>
+                    <p class="text-xs text-slate-400">Choose how to import groceries</p>
+                </div>
+                <button onclick="closeCaptureChoiceModal()" class="text-slate-400 hover:text-white text-base">✕</button>
+            </div>
+
+            <button onclick="startSingleItemScan()" class="w-full text-left p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition active:scale-98">
+                <div class="flex items-center gap-3.5">
+                    <div class="p-3 bg-white/5 rounded-xl border border-white/10">
+                        <svg class="w-5 h-5 text-slate-200" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path></svg>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-xs text-white">Single Pantry Item</h3>
+                        <p class="text-[11px] text-slate-400 mt-0.5">Scan food item using camera.</p>
+                    </div>
+                </div>
+            </button>
+
+            <button onclick="triggerReceiptUpload()" class="w-full text-left p-4 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition active:scale-98">
+                <div class="flex items-center gap-3.5">
+                    <div class="p-3 bg-white/5 rounded-xl border border-white/10">
+                        <svg class="w-5 h-5 text-slate-200" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-xs text-white">Grocery Receipt</h3>
+                        <p class="text-[11px] text-slate-400 mt-0.5">Snap paper receipt to batch import.</p>
+                    </div>
+                </div>
+            </button>
+            <input type="file" id="receipt-file-input" accept="image/*" capture="environment" class="hidden" onchange="handleReceiptFileSelected(event)">
+        </div>
+    </div>
+
+    <!-- CAMERA OVERLAY -->
+    <div id="camera-modal" class="fixed inset-0 bg-slate-950/95 z-[100] flex flex-col justify-between hidden p-6 backdrop-blur-xl">
+        <div class="text-center pt-4">
+            <span class="text-slate-400 font-bold tracking-widest text-[10px] uppercase block mb-1">KAI Vision</span>
+            <p class="text-white font-bold text-lg">Position food item below</p>
+        </div>
+        <div class="relative w-full max-w-md mx-auto aspect-square bg-slate-900/50 rounded-3xl overflow-hidden border border-white/10 flex items-center justify-center">
+            <video id="video" class="absolute w-full h-full object-cover" autoplay playsinline></video>
+            <div class="absolute inset-8 border border-dashed border-white/20 rounded-2xl pointer-events-none flex items-center justify-center">
+                <p id="loading-indicator" class="hidden text-xs bg-slate-950/90 backdrop-blur-md px-5 py-3 rounded-2xl border border-white/20 text-white tracking-wider font-medium animate-pulse shadow-lg">
+                    Analyzing item...
+                </p>
+            </div>
+        </div>
+        <div class="flex flex-col items-center gap-4 pb-8">
+            <button id="shutter-button" onclick="takeSnapshot()" class="w-20 h-20 bg-white/10 rounded-full border-[4px] border-white/40 hover:bg-white/20 active:scale-95 transition flex items-center justify-center">
+                <div class="w-8 h-8 bg-white rounded-full"></div>
+            </button>
+            <button onclick="closeCamera()" class="text-slate-400 hover:text-white text-[10px] font-bold uppercase tracking-widest pt-2 transition">Cancel</button>
+        </div>
+    </div>
+
+    <!-- STREAMLINED FLOATING DOCK WITH TOP CAPTURE PILL -->
+<div id="navigation-dock" class="fixed bottom-5 left-1/2 -translate-x-1/2 w-[92%] max-w-md z-50">
+    <div class="liquid-glass-dock rounded-[2.5rem] p-3 flex flex-col items-center gap-3 shadow-2xl relative overflow-hidden">
+        
+        <!-- TOP CAPTURE PILL BUTTON -->
+        <button id="btn-capture-pill" onclick="openCaptureChoiceModal()" class="liquid-glass-button group flex items-center justify-center gap-2 px-6 py-2 rounded-full border border-white/20 hover:border-white/40 text-white font-bold transition-all duration-300 active:scale-95 shadow-md">
+            <svg class="w-4 h-4 text-white transition-transform group-hover:scale-110" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 0 1 5.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 0 0 2.25 2.25h12A2.25 2.25 0 0 0 21 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 0 0-1.134-.175 2.31 2.31 0 0 1-1.641-1.055l-.822-1.316a2.192 2.192 0 0 0-1.736-1.039 48.774 48.774 0 0 0-5.231 0 2.192 2.192 0 0 0-1.736 1.039l-.821 1.316Z"></path>
+                <circle cx="12" cy="13" r="3" stroke="currentColor" stroke-width="2"></circle>
+            </svg>
+            <span class="text-xs tracking-wide">Capture</span>
+        </button>
+
+        <!-- BOTTOM NAV BAR ROW -->
+        <div class="w-full bg-white/[0.03] border border-white/10 rounded-3xl px-2 py-1.5 flex items-center justify-between gap-1 backdrop-blur-md">
+            
+            <button id="nav-history" onclick="switchTab('history', 'Activity History')" class="flex-1 flex flex-col items-center justify-center py-2 rounded-2xl text-slate-400 hover:text-white transition">
+                <svg class="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span class="text-[9px] font-bold uppercase tracking-wider mt-1">History</span>
+            </button>
+
+            <button id="nav-shopping" onclick="switchTab('shopping', 'Shopping List')" class="flex-1 flex flex-col items-center justify-center py-2 rounded-2xl text-slate-400 hover:text-white transition">
+                <svg class="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path></svg>
+                <span class="text-[9px] font-bold uppercase tracking-wider mt-1">List</span>
+            </button>
+
+            <button id="nav-dashboard" onclick="switchTab('dashboard', 'My Pantry')" class="liquid-active-pill flex-1 flex flex-col items-center justify-center py-2 rounded-2xl text-white transition">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+                <span class="text-[9px] font-bold uppercase tracking-wider mt-1">Pantry</span>
+            </button>
+
+            <button id="nav-kai" onclick="switchTab('kai', 'KAI AI')" class="flex-1 flex flex-col items-center justify-center py-2 rounded-2xl text-slate-400 hover:text-white transition">
+                <svg class="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
+                <span class="text-[9px] font-bold uppercase tracking-wider mt-1">KAI AI</span>
+            </button>
+
+            <button id="nav-stats" onclick="switchTab('stats', 'Savings & Goals')" class="flex-1 flex flex-col items-center justify-center py-2 rounded-2xl text-slate-400 hover:text-white transition">
+                <svg class="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <span class="text-[9px] font-bold uppercase tracking-wider mt-1">Savings</span>
+            </button>
+
+        </div>
+    </div>
+</div>
+
+    <!-- ITEM REVIEW MODAL -->
+    <div id="confirmModal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <div class="modal-header border-b border-white/10 pb-3 mb-4">
+          <h2 class="text-white font-bold text-base">Verify Item</h2>
+          <p class="text-xs text-slate-400">Review details before adding to pantry.</p>
+        </div>
+        <form id="confirmItemForm" class="space-y-4">
+          <div class="flex flex-col gap-1.5">
+            <label class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Item Name</label>
+            <input type="text" id="modalItemName" required class="bg-white/5 border border-white/10 rounded-xl p-2.5 text-xs text-white outline-none focus:border-white/20">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1.5">
+              <label class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Quantity</label>
+              <input type="text" id="modalQuantity" required class="bg-white/5 border border-white/10 rounded-xl p-2.5 text-xs text-white outline-none focus:border-white/20">
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <label class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Storage</label>
+              <select id="modalStorage" class="bg-slate-900 border border-white/10 rounded-xl p-2.5 text-xs text-white outline-none">
+                <option value="Fridge">Fridge ❄️</option>
+                <option value="Pantry">Pantry 🪵</option>
+                <option value="Freezer">Freezer 🥶</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1.5">
+              <label class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Added Date</label>
+              <input type="date" id="modalAddedDate" required class="bg-white/5 border border-white/10 rounded-xl p-2.5 text-xs text-white outline-none">
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <label class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Expiration Date</label>
+              <input type="date" id="modalExpiryDate" required class="bg-white/5 border border-white/10 rounded-xl p-2.5 text-xs text-white outline-none">
+            </div>
+          </div>
+          <div class="flex justify-end gap-2 pt-3 border-t border-white/10">
+            <button type="button" onclick="closeConfirmModal()" class="px-4 py-2.5 text-xs text-slate-400 hover:text-white transition">Cancel</button>
+            <button type="submit" class="liquid-glass-button border border-white/20 text-white px-5 py-2.5 rounded-xl text-xs font-bold transition active:scale-95">Confirm & Add</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- BATCH RECEIPT MODAL -->
+    <div id="receiptModal" class="modal-backdrop hidden">
+        <div class="modal-card max-w-md space-y-4">
+            <div class="flex justify-between items-center border-b border-white/10 pb-3">
+                <h2 class="text-white font-bold text-base">Extracted Receipt Items</h2>
+                <button onclick="closeReceiptModal()" class="text-slate-400 text-sm">✕</button>
+            </div>
+            <p class="text-xs text-slate-400">Review items before saving to pantry:</p>
+            <div id="receipt-items-list" class="space-y-2.5 max-h-64 overflow-y-auto pr-1"></div>
+            <button onclick="saveBatchReceiptItems()" class="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold py-3 rounded-xl text-xs uppercase tracking-wider transition active:scale-95 shadow-lg">
+                Save All Items To Pantry
+            </button>
+        </div>
+    </div>
+
+    <!-- ENHANCED INTERACTIVE FLASHCARD COOKING MODAL -->
+    <div id="recipeModal" class="modal-backdrop hidden">
+        <div class="modal-card max-w-md min-h-[380px] flex flex-col justify-between">
+            <div class="modal-header border-b border-white/10 pb-3">
+                <div class="flex justify-between items-center">
+                    <h2 id="recipeModalTitle" class="text-white font-bold text-base leading-tight truncate max-w-[75%]">Recipe Instructions</h2>
+                    <span id="recipeStepTracker" class="text-[10px] font-semibold text-slate-300 bg-white/10 px-3 py-1 rounded-full border border-white/10">Overview</span>
+                </div>
+            </div>
+
+            <!-- CARD BODY CONTENT -->
+            <div class="flex-1 my-4 flex flex-col justify-center min-h-[180px]">
+                <div id="deckIngredientsContainer" class="space-y-2.5 animate-fade-in">
+                    <h4 class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Required Ingredients</h4>
+                    <ul id="recipeModalIngredients" class="list-disc pl-5 space-y-2 text-xs text-slate-200 leading-relaxed"></ul>
+                </div>
+
+                <div id="deckStepsContainer" class="hidden space-y-3 animate-fade-in text-center px-2 flex flex-col items-center justify-center">
+                    <span id="deckStepNumberBadge" class="inline-block text-[10px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 rounded-full tracking-wider">
+                        Step 1
+                    </span>
+                    <p id="deckStepBodyText" class="text-sm font-medium text-slate-100 leading-relaxed pt-2"></p>
+                </div>
+            </div>
+
+            <!-- CONTROLS -->
+            <div class="border-t border-white/10 pt-3 flex gap-2.5">
+                <button type="button" id="btnDeckPrev" onclick="navigateDeck(-1)" class="flex-1 text-slate-300 border border-white/10 bg-white/5 hover:bg-white/10 text-xs py-3 rounded-xl font-medium transition">
+                    ← Back
+                </button>
+                <button type="button" id="btnDeckNext" onclick="navigateDeck(1)" class="flex-1 bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 text-xs py-3 rounded-xl font-bold transition active:scale-95">
+                    Start Cooking
+                </button>
+                <button type="button" id="btnDeckClose" onclick="closeRecipeModal()" class="text-xs text-slate-400 hover:text-white px-3 transition">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- FRONT-END LOGIC -->
+    <script>
+        let streamInstance = null;
+        let currentPantryItems = [];
+        let activeDeckRecipe = null;
+        let currentDeckIndex = 0;
+        let chatHistory = [];
+        let tempReceiptItems = [];
+
+        /* DEFAULT FALLBACK RECIPES */
+        const DEFAULT_RECIPE_STEPS = {
+            "Creamy Avocado Pan-Seared Chicken": [
+                "Season chicken breasts generously with garlic powder, paprika, salt, and black pepper.",
+                "Heat 1 tablespoon of olive oil in a skillet over medium-high heat until shimmering.",
+                "Sear chicken breasts for 6 to 7 minutes on each side until cooked through and golden brown.",
+                "In a separate bowl, mash ripe avocado with whole milk and seasonings until creamy.",
+                "Slice the warm chicken breasts, spoon the creamy avocado blend on top, and serve immediately."
+            ]
+        };
+
+        /* IN-APP GLASS MODALS SYSTEM */
+        function showCustomAlert(message, title = "Notice", icon = "💡") {
+            document.getElementById('alert-title').innerText = title;
+            document.getElementById('alert-message').innerText = message;
+            document.getElementById('alert-icon-container').innerText = icon;
+            document.getElementById('alert-actions').innerHTML = `
+                <button onclick="closeCustomAlert()" class="w-full bg-white/10 hover:bg-white/20 border border-white/15 text-white py-2.5 rounded-xl font-bold text-xs transition">
+                    OK
+                </button>
+            `;
+            document.getElementById('universal-alert-modal').classList.remove('hidden');
+        }
+
+        function showCustomConfirm(message, onConfirm, title = "Confirm Action") {
+            document.getElementById('alert-title').innerText = title;
+            document.getElementById('alert-message').innerText = message;
+            document.getElementById('alert-icon-container').innerText = "⚠️";
+            document.getElementById('alert-actions').innerHTML = `
+                <button onclick="closeCustomAlert()" class="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 py-2.5 rounded-xl text-xs transition">Cancel</button>
+                <button id="btn-confirm-action" class="flex-1 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 font-bold py-2.5 rounded-xl text-xs transition">Confirm</button>
+            `;
+            document.getElementById('btn-confirm-action').onclick = () => {
+                closeCustomAlert();
+                onConfirm();
+            };
+            document.getElementById('universal-alert-modal').classList.remove('hidden');
+        }
+
+        function closeCustomAlert() {
+            document.getElementById('universal-alert-modal').classList.add('hidden');
+        }
+
+        /* NAVIGATION & TAB SYSTEM */
+        function switchTab(tabId, displayTitle) {
+            document.querySelectorAll('.tab-content').forEach(pane => pane.classList.remove('active'));
+            const targetPane = document.getElementById(`tab-${tabId}`);
+            if (targetPane) targetPane.classList.add('active');
+            
+            document.getElementById('screen-title').innerText = displayTitle;
+
+            const buttons = ['nav-history', 'nav-shopping', 'nav-dashboard', 'nav-kai', 'nav-stats'];
+            buttons.forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) btn.className = "flex-1 flex flex-col items-center justify-center py-2 rounded-2xl text-slate-400 hover:text-white transition";
+            });
+
+            const activeBtn = document.getElementById(`nav-${tabId}`);
+            if (activeBtn) activeBtn.className = "liquid-active-pill flex-1 flex flex-col items-center justify-center py-2 rounded-2xl text-white transition";
+
+            if (tabId === 'stats') loadSavingsDashboard();
+            else if (tabId === 'history') loadActivityHistory();
+            else if (tabId === 'shopping') loadShoppingList();
+            else if (tabId === 'dashboard') fetchPantryItems();
+        }
+
+        /* CAPTURE & RECEIPT HANDLERS */
+        function openCaptureChoiceModal() { document.getElementById('capture-choice-modal').classList.remove('hidden'); }
+        function closeCaptureChoiceModal() { document.getElementById('capture-choice-modal').classList.add('hidden'); }
+        function startSingleItemScan() { closeCaptureChoiceModal(); openCamera(); }
+        function triggerReceiptUpload() { closeCaptureChoiceModal(); document.getElementById('receipt-file-input').click(); }
+
+        async function handleReceiptFileSelected(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const imageBase64 = e.target.result;
+                try {
+                    showCustomAlert("Processing receipt image...", "AI Receipt Scan", "⏳");
+                    const response = await fetch('/api/pantry/scan-receipt', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ imageBase64 })
+                    });
+                    const result = await response.json();
+                    closeCustomAlert();
+
+                    if (response.ok && result.items) {
+                        tempReceiptItems = result.items;
+                        renderReceiptReviewModal();
+                    } else {
+                        showCustomAlert("Could not parse items from receipt.", "Error", "❌");
+                    }
+                } catch (err) {
+                    showCustomAlert("Error connecting to receipt service.", "Network Error", "❌");
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function renderReceiptReviewModal() {
+            const container = document.getElementById('receipt-items-list');
+            container.innerHTML = '';
+            const today = new Date();
+
+            tempReceiptItems.forEach((item, idx) => {
+                const expDate = new Date();
+                expDate.setDate(today.getDate() + (item.days_until_expiry || 7));
+                const formattedExp = expDate.toISOString().split('T')[0];
+                item.computedExpiry = formattedExp;
+
+                const row = document.createElement('div');
+                row.className = "bg-white/5 p-3 rounded-xl flex items-center justify-between text-xs border border-white/5";
+                row.innerHTML = `
+                    <div>
+                        <p class="font-bold text-white">${item.name}</p>
+                        <p class="text-[10px] text-slate-400 mt-0.5">Qty: ${item.quantity || '1'} • Exp: ${formattedExp}</p>
+                    </div>
+                    <button onclick="removeTempReceiptItem(${idx})" class="p-1.5 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 rounded-lg transition">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                `;
+                container.appendChild(row);
+            });
+
+            document.getElementById('receiptModal').classList.remove('hidden');
+        }
+
+        function removeTempReceiptItem(idx) {
+            tempReceiptItems.splice(idx, 1);
+            renderReceiptReviewModal();
+        }
+
+        function closeReceiptModal() {
+            document.getElementById('receiptModal').classList.add('hidden');
+        }
+
+        async function saveBatchReceiptItems() {
+            const todayStr = new Date().toISOString().split('T')[0];
+            for (const item of tempReceiptItems) {
+                await fetch('/api/pantry', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: item.name,
+                        quantity: item.quantity || '1',
+                        expiry_date: item.computedExpiry,
+                        added_date: todayStr,
+                        storage: 'Pantry'
+                    })
+                });
+            }
+            closeReceiptModal();
+            fetchPantryItems();
+            showCustomAlert(`Added ${tempReceiptItems.length} items to your pantry!`, "Receipt Saved", "🎉");
+        }
+
+        /* SHOPPING LIST */
+        async function loadShoppingList() {
+            const container = document.getElementById('shopping-list-container');
+            if (!container) return;
+            
+            try {
+                const res = await fetch('/api/shopping-list');
+                const items = await res.json();
+                
+                if (items.length === 0) {
+                    container.innerHTML = `<p class="text-xs text-slate-500 text-center py-6">Shopping list is empty.</p>`;
+                    return;
+                }
+
+                container.innerHTML = '';
+                items.forEach(item => {
+                    const el = document.createElement('div');
+                    el.className = `p-3.5 rounded-2xl flex items-center justify-between text-xs ${item.is_checked ? 'bg-white/2 opacity-50' : 'bg-white/5 border border-white/5'}`;
+                    el.innerHTML = `
+                        <div class="flex items-center gap-3">
+                            <input type="checkbox" ${item.is_checked ? 'checked' : ''} onchange="toggleShoppingChecked(${item.id}, this.checked)" class="w-4 h-4 rounded accent-emerald-500 cursor-pointer">
+                            <div>
+                                <p class="font-bold text-white ${item.is_checked ? 'line-through' : ''}">${item.name}</p>
+                                <span class="text-[10px] text-slate-400">Qty: ${item.quantity || '1'}</span>
+                            </div>
+                        </div>
+                        <button onclick="deleteShoppingItem(${item.id})" class="p-1.5 hover:bg-rose-500/20 rounded-lg text-slate-400 hover:text-rose-400 transition">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
+                    `;
+                    container.appendChild(el);
+                });
+            } catch (e) {
+                console.error("Error loading shopping list:", e);
+            }
+        }
+
+        async function addShoppingItem() {
+            const input = document.getElementById('shopping-input');
+            const name = input.value.trim();
+            if (!name) return;
+
+            await fetch('/api/shopping-list', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, category: 'Custom Items' })
+            });
+            input.value = '';
+            loadShoppingList();
+        }
+
+        async function toggleShoppingChecked(id, is_checked) {
+            await fetch(`/api/shopping-list/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_checked })
+            });
+            loadShoppingList();
+        }
+
+        async function deleteShoppingItem(id) {
+            await fetch(`/api/shopping-list/${id}`, { method: 'DELETE' });
+            loadShoppingList();
+        }
+
+        async function checkoutShoppingList() {
+            try {
+                const res = await fetch('/api/shopping-list/checkout', { method: 'POST' });
+                const data = await res.json();
+                await loadShoppingList();
+                await fetchPantryItems();
+
+                if (!res.ok) {
+                    showCustomAlert(data?.error || "Couldn't move items to your pantry.", "Error", "⚠️");
+                    return;
+                }
+
+                if (data.movedCount === 0) {
+                    showCustomAlert("Check off items in your list first, then tap Move Checked.", "Nothing Checked", "☑️");
+                } else if (data.failedItems && data.failedItems.length > 0) {
+                    showCustomAlert(`Moved ${data.movedCount} item(s). Couldn't move: ${data.failedItems.join(', ')}`, "Partially Moved", "⚠️");
+                } else {
+                    showCustomAlert(`Moved ${data.movedCount} item(s) to your pantry stock!`, "Items Added", "📦");
+                }
+            } catch (err) {
+                console.error("Checkout error:", err);
+                showCustomAlert("Couldn't reach the server. Please check your connection!", "Error", "⚠️");
+            }
+        }
+
+        async function trimShoppingListWithAI() {
+            const budget = document.getElementById('budget-input').value;
+            if (!budget) {
+                showCustomAlert("Please enter a target budget first.", "Budget Required", "💡");
+                return;
+            }
+
+            const res = await fetch('/api/shopping-list');
+            const items = await res.json();
+            if (items.length === 0) return;
+
+            const trimRes = await fetch('/api/shopping-list/trim', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ budget, items })
+            });
+            const advice = await trimRes.json();
+            
+            if (advice.essential) {
+                showCustomAlert(`Essentials:\n${advice.essential.join(', ')}\n\nOptional:\n${(advice.optional || []).join(', ')}`, `AI Budget Advice ($${budget})`, "✨");
+            }
+        }
+
+        /* PANTRY INVENTORY & CAMERA MANAGEMENT */
+        async function fetchPantryItems() {
+            try {
+                const response = await fetch('/api/pantry');
+                const items = await response.json();
+                currentPantryItems = items;
+
+                const listExpired = document.getElementById('list-expired');
+                const listSoon = document.getElementById('list-soon');
+                const listFresh = document.getElementById('list-fresh');
+                const emptyState = document.getElementById('pantry-empty');
+
+                if (!listExpired || !listSoon || !listFresh || !emptyState) return;
+
+                listExpired.innerHTML = '';
+                listSoon.innerHTML = '';
+                listFresh.innerHTML = '';
+
+                if (items.length === 0) {
+                    emptyState.classList.remove('hidden');
+                    document.getElementById('section-expired').classList.add('hidden');
+                    document.getElementById('section-soon').classList.add('hidden');
+                    document.getElementById('section-fresh').classList.add('hidden');
+                    checkPantryExpirations();
+                    return;
+                }
+                emptyState.classList.add('hidden');
+
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+
+                let hasExpired = false, hasSoon = false, hasFresh = false;
+
+                items.forEach(item => {
+                    const expiryParts = item.expiry_date.split('-');
+                    const expiry = new Date(expiryParts[0], expiryParts[1] - 1, expiryParts[2]);
+                    expiry.setHours(0, 0, 0, 0);
+
+                    const diffDays = Math.round((expiry - today) / (1000 * 60 * 60 * 24));
+
+                    const card = document.createElement('div');
+                    card.className = "glass-panel p-4 flex justify-between items-center rounded-2xl border border-white/5 transition hover:border-white/15";
+                    card.innerHTML = `
+                        <div>
+                            <p class="font-bold text-xs text-white">${item.name}</p>
+                            <p class="text-[10px] text-slate-400 mt-0.5">Qty: ${item.quantity || '1'} • Exp: ${item.expiry_date}</p>
+                        </div>
+                        <button onclick="removeItem(${item.id})" class="p-1.5 hover:bg-rose-500/20 rounded-lg text-slate-400 hover:text-rose-400 transition active:scale-95">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
+                    `;
+
+                    if (diffDays < 0) {
+                        listExpired.appendChild(card);
+                        hasExpired = true;
+                    } else if (diffDays <= 3) {
+                        listSoon.appendChild(card);
+                        hasSoon = true;
+                    } else {
+                        listFresh.appendChild(card);
+                        hasFresh = true;
+                    }
+                });
+
+                document.getElementById('section-expired').classList.toggle('hidden', !hasExpired);
+                document.getElementById('section-soon').classList.toggle('hidden', !hasSoon);
+                document.getElementById('section-fresh').classList.toggle('hidden', !hasFresh);
+
+                checkPantryExpirations();
+            } catch (err) {
+                console.error("Error drawing pantry:", err);
+            }
+        }
+
+        function removeItem(id) {
+            showCustomConfirm("Remove item from pantry inventory?", async () => {
+                await fetch(`/api/pantry/${id}`, { method: 'DELETE' });
+                fetchPantryItems();
+            }, "Remove Item");
+        }
+
+        async function openCamera() {
+            document.getElementById('navigation-dock').classList.add('hidden');
+            const modal = document.getElementById('camera-modal');
+            const video = document.getElementById('video');
+            if (modal) modal.classList.remove('hidden');
+
+            try {
+                streamInstance = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "environment" },
+                    audio: false
+                });
+                if (video) video.srcObject = streamInstance;
+            } catch (err) {
+                showCustomAlert("Camera access was blocked.", "Permission Error", "🚫");
+                closeCamera();
+            }
+        }
+
+        function closeCamera() {
+            const modal = document.getElementById('camera-modal');
+            if (modal) modal.classList.add('hidden');
+            document.getElementById('navigation-dock').classList.remove('hidden');
+
+            if (streamInstance) {
+                streamInstance.getTracks().forEach(track => track.stop());
+                streamInstance = null;
+            }
+        }
+
+        function openConfirmModal(scannedItem) {
+            document.getElementById('modalItemName').value = scannedItem.name || '';
+            document.getElementById('modalQuantity').value = scannedItem.quantity || '1';
+            document.getElementById('modalStorage').value = scannedItem.storage || 'Pantry';
+            document.getElementById('modalAddedDate').value = scannedItem.added_date || new Date().toISOString().split('T')[0];
+            document.getElementById('modalExpiryDate').value = scannedItem.expiry_date || '';
+            document.getElementById('confirmModal').classList.remove('hidden');
+        }
+
+        function closeConfirmModal() {
+            document.getElementById('confirmModal').classList.add('hidden');
+        }
+
+        const confirmForm = document.getElementById('confirmItemForm');
+        if (confirmForm) {
+            confirmForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const payload = {
+                    name: document.getElementById('modalItemName').value,
+                    quantity: document.getElementById('modalQuantity').value,
+                    storage: document.getElementById('modalStorage').value,
+                    added_date: document.getElementById('modalAddedDate').value,
+                    expiry_date: document.getElementById('modalExpiryDate').value
+                };
+
+                try {
+                    const response = await fetch('/api/pantry', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (response.ok) {
+                        closeConfirmModal();
+                        fetchPantryItems();
+                    }
+                } catch (err) {
+                    console.error("Save item error:", err);
+                }
+            });
+        }
+
+        async function takeSnapshot() {
+            const video = document.getElementById('video');
+            const indicator = document.getElementById('loading-indicator');
+            const shutter = document.getElementById('shutter-button');
+
+            if (!video) return;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
+
+            if (indicator) indicator.classList.remove('hidden');
+            if (shutter) shutter.disabled = true;
+
+            try {
+                const response = await fetch('/api/pantry/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: imageBase64 })
+                });
+
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    closeCamera();
+                    if (result.item) {
+                        openConfirmModal(result.item);
+                    } else {
+                        fetchPantryItems();
+                    }
+                } else {
+                    showCustomAlert("Could not analyze food item.", "Scan Error", "❌");
+                }
+            } catch (err) {
+                console.error("Scan network error:", err);
+            } finally {
+                if (indicator) indicator.classList.add('hidden');
+                if (shutter) shutter.disabled = false;
+            }
+        }
+
+        /* STABLE ACTIVITY HISTORY LOAD */
+        async function loadActivityHistory() {
+            const historyLog = document.getElementById('history-log');
+            if (!historyLog) return;
+
+            try {
+                const res = await fetch('/api/history');
+                let recipes = await res.json();
+                historyLog.innerHTML = '';
+
+                if (!recipes || recipes.length === 0) {
+                    historyLog.innerHTML = `
+                        <div class="text-center py-10 text-slate-500">
+                            <p class="text-xs">No cooked meals logged yet.</p>
+                            <p class="text-[10px] mt-1">Complete a recipe in KAI to see your history!</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                const uniqueRecipes = [];
+                recipes.forEach(item => {
+                    const isDuplicate = uniqueRecipes.some(u => 
+                        u.recipe_name === item.recipe_name && 
+                        Math.abs(new Date(u.created_at || 0) - new Date(item.created_at || 0)) < 10000
+                    );
+                    if (!isDuplicate) uniqueRecipes.push(item);
+                });
+
+                uniqueRecipes.forEach((recipe, idx) => {
+                    const card = document.createElement('div');
+                    card.className = "bg-white/[0.02] border border-white/10 rounded-2xl overflow-hidden transition-all duration-200";
+
+                    const stepsData = recipe.recipe_steps || (DEFAULT_RECIPE_STEPS[recipe.recipe_name] ? DEFAULT_RECIPE_STEPS[recipe.recipe_name].join(' | ') : '');
+
+                    card.innerHTML = `
+                        <div onclick="toggleHistoryCardExpand(${idx})" class="p-4 flex items-center justify-between cursor-pointer hover:bg-white/5 transition">
+                            <div class="flex items-center gap-3.5">
+                                <div class="w-9 h-9 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-sm">
+                                    🍳
+                                </div>
+                                <div>
+                                    <h4 class="font-bold text-xs text-white">${recipe.recipe_name || 'Home Cooked Meal'}</h4>
+                                    <p class="text-[10px] text-slate-400 mt-0.5">Click to view details</p>
+                                </div>
+                            </div>
+                            <svg id="history-arrow-${idx}" class="w-4 h-4 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"></path></svg>
+                        </div>
+                        
+                        <div id="history-body-${idx}" class="hidden p-4 pt-0 border-t border-white/5 space-y-3 bg-black/20">
+                            <div class="pt-3">
+                                <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Ingredients</p>
+                                <p class="text-xs text-slate-300 leading-relaxed">${recipe.ingredients_used || 'Pantry Ingredients'}</p>
+                            </div>
+                            <div class="pt-1 flex justify-end">
+                                <button onclick="triggerCookAgain('${encodeURIComponent(JSON.stringify({...recipe, recipe_steps: stepsData}))}')" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 active:scale-95 shadow-md">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                                    Cook Again
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    historyLog.appendChild(card);
+                });
+            } catch (e) {
+                console.error("Error loading history:", e);
+            }
+        }
+
+        function toggleHistoryCardExpand(index) {
+            const body = document.getElementById(`history-body-${index}`);
+            const arrow = document.getElementById(`history-arrow-${index}`);
+            if (body && arrow) {
+                const isHidden = body.classList.contains('hidden');
+                body.classList.toggle('hidden', !isHidden);
+                arrow.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+            }
+        }
+
+        function triggerCookAgain(encodedRecipeStr) {
+            const recipe = JSON.parse(decodeURIComponent(encodedRecipeStr));
+            openRecipeModal({
+                recipeTitle: recipe.recipe_name,
+                ingredients: recipe.ingredients_used ? recipe.ingredients_used.split(',') : [],
+                steps: recipe.recipe_steps ? recipe.recipe_steps.split('|') : (DEFAULT_RECIPE_STEPS[recipe.recipe_name] || [])
+            });
+        }
+
+        /* FIXED INTERACTIVE FLASHCARD ENGINE */
+        function openRecipeModal(recipe) {
+            if (!recipe) return;
+            
+            let title = recipe.recipeTitle 
+                || (recipe.pantryAlternative ? recipe.pantryAlternative.title : null) 
+                || recipe.recipe_name 
+                || "Recipe Details";
+            
+            let rawIngredients = recipe.ingredients || [];
+            if (!Array.isArray(rawIngredients) && typeof rawIngredients === 'string') {
+                rawIngredients = rawIngredients.split(',');
+            }
+            
+            let ingredients = rawIngredients.map(i => String(i).trim()).filter(i => i.length > 0);
+
+            let steps = [];
+            if (Array.isArray(recipe.steps) && recipe.steps.length > 0) {
+                steps = recipe.steps;
+            } else if (recipe.pantryAlternative && Array.isArray(recipe.pantryAlternative.steps) && recipe.pantryAlternative.steps.length > 0) {
+                steps = recipe.pantryAlternative.steps;
+            } else if (typeof recipe.recipe_steps === 'string' && recipe.recipe_steps.trim().length > 0) {
+                steps = recipe.recipe_steps.split('|');
+            } else {
+                console.warn('KAI: No real cooking steps were provided for this recipe.', recipe);
+                steps = [
+                    "KAI couldn't generate detailed steps for this recipe. Try asking KAI again in chat, or rephrase your request."
+                ];
+            }
+
+            activeDeckRecipe = { 
+                title: title, 
+                ingredients: ingredients.length > 0 ? ingredients : ["No ingredients specified"], 
+                steps: steps.map(s => String(s).trim()).filter(s => s.length > 0) 
+            };
+            currentDeckIndex = 0; 
+            
+            const titleEl = document.getElementById('recipeModalTitle');
+            if (titleEl) titleEl.innerText = activeDeckRecipe.title;
+
+            const ingList = document.getElementById('recipeModalIngredients');
+            if (ingList) {
+                ingList.innerHTML = '';
+                activeDeckRecipe.ingredients.forEach(ingText => {
+                    const li = document.createElement('li');
+                    li.innerText = ingText;
+                    ingList.appendChild(li);
+                });
+            }
+
+            renderDeckState();
+            
+            const modalEl = document.getElementById('recipeModal');
+            if (modalEl) modalEl.classList.remove('hidden');
+        }
+
+        function renderDeckState() {
+            const tracker = document.getElementById('recipeStepTracker');
+            const ingredientsView = document.getElementById('deckIngredientsContainer');
+            const stepsView = document.getElementById('deckStepsContainer');
+            const btnPrev = document.getElementById('btnDeckPrev');
+            const btnNext = document.getElementById('btnDeckNext');
+
+            if (currentDeckIndex === 0) {
+                tracker.innerText = "Overview";
+                ingredientsView.classList.remove('hidden');
+                stepsView.classList.add('hidden');
+                btnPrev.classList.add('hidden');
+                btnNext.innerText = "Start Cooking";
+            } else {
+                ingredientsView.classList.add('hidden');
+                stepsView.classList.remove('hidden');
+                btnPrev.classList.remove('hidden');
+
+                const totalSteps = activeDeckRecipe.steps.length;
+                tracker.innerText = `Step ${currentDeckIndex} / ${totalSteps}`;
+                document.getElementById('deckStepNumberBadge').innerText = `Step ${currentDeckIndex} of ${totalSteps}`;
+                
+                const currentStepText = activeDeckRecipe.steps[currentDeckIndex - 1];
+                document.getElementById('deckStepBodyText').innerText = currentStepText || "Step details unavailable — try regenerating this recipe from chat.";
+
+                if (currentDeckIndex >= totalSteps) {
+                    btnNext.innerText = "Finish & Deduct Stock";
+                } else {
+                    btnNext.innerText = "Next Step →";
+                }
+            }
+        }
+
+        async function navigateDeck(direction) {
+            const targetIndex = currentDeckIndex + direction;
+            if (targetIndex < 0) return;
+            
+            if (targetIndex > activeDeckRecipe.steps.length) {
+                await finishAndLogRecipe();
+                return;
+            }
+            
+            currentDeckIndex = targetIndex;
+            renderDeckState();
+        }
+
+        function closeRecipeModal() {
+            document.getElementById('recipeModal').classList.add('hidden');
+            activeDeckRecipe = null;
+            currentDeckIndex = 0;
+        }
+
+        /* DUPLICATE-PROTECTED RECIPE LOGGING ENGINE */
+        let isLoggingRecipe = false;
+        let lastLoggedMealName = "";
+        let lastLoggedMealTimestamp = 0;
+
+        async function finishAndLogRecipe() {
+            if (!activeDeckRecipe || isLoggingRecipe) return;
+
+            const now = Date.now();
+            if (activeDeckRecipe.title === lastLoggedMealName && (now - lastLoggedMealTimestamp) < 5000) {
+                closeRecipeModal();
+                return;
+            }
+
+            isLoggingRecipe = true;
+
+            try {
+                await deductPantryStockForRecipe(activeDeckRecipe.ingredients);
+
+                const record = {
+                    recipe_name: activeDeckRecipe.title,
+                    ingredients_used: activeDeckRecipe.ingredients.join(', '),
+                    recipe_steps: activeDeckRecipe.steps.join(' | ')
+                };
+
+                await fetch('/api/history', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(record)
+                });
+
+                lastLoggedMealName = activeDeckRecipe.title;
+                lastLoggedMealTimestamp = Date.now();
+
+                closeRecipeModal();
+                loadActivityHistory();
+                fetchPantryItems();
+                showCustomAlert("Meal logged & pantry stock updated!", "Bon Appétit!", "🍳");
+
+            } catch (err) {
+                console.error("Error logging recipe:", err);
+            } finally {
+                isLoggingRecipe = false;
+            }
+        }
+
+        async function deductPantryStockForRecipe(usedIngredients) {
+            if (!usedIngredients || usedIngredients.length === 0) return;
+
+            for (const rawIng of usedIngredients) {
+                const cleanedIng = rawIng.toLowerCase();
+                const matchedPantryItem = currentPantryItems.find(p => 
+                    cleanedIng.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(cleanedIng)
+                );
+
+                if (matchedPantryItem) {
+                    await fetch(`/api/pantry/${matchedPantryItem.id}`, { method: 'DELETE' });
+                }
+            }
+        }
+
+        /* SAVINGS DASHBOARD ENGINE */
+        async function loadSavingsDashboard() {
+            const container = document.getElementById('savings-dashboard');
+            if (!container) return;
+
+            let history = [];
+            try {
+                const res = await fetch('/api/history');
+                history = await res.json();
+            } catch(e) {}
+
+            const cookedCount = Math.max(history.length, 1);
+            const estimatedSavings = (cookedCount * 14.20).toFixed(2);
+            const goalSavings = 150;
+            const progressPercent = Math.min(100, Math.round((estimatedSavings / goalSavings) * 100));
+
+            container.innerHTML = `
+                <div class="glass-panel rounded-3xl p-6 border border-white/10 bg-white/[0.02]">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Monthly Grocery Savings</span>
+                            <h2 class="text-2xl font-bold text-white mt-0.5">$${estimatedSavings} <span class="text-xs font-normal text-slate-500">/ $${goalSavings}</span></h2>
+                            <p class="text-xs text-slate-400 mt-1.5">Rescued <span class="text-white font-bold">${cookedCount} home-cooked meals</span></p>
+                        </div>
+                        <div class="relative w-16 h-16 flex items-center justify-center shrink-0">
+                            <svg class="w-16 h-16">
+                                <circle class="text-slate-800" stroke-width="5" stroke="currentColor" fill="transparent" r="28" cx="32" cy="32"/>
+                                <circle class="text-emerald-400 progress-ring__circle" 
+                                        stroke-width="5" 
+                                        stroke-dasharray="175" 
+                                        stroke-dashoffset="${175 - (175 * progressPercent)/100}" 
+                                        stroke-linecap="round" 
+                                        stroke="currentColor" 
+                                        fill="transparent" 
+                                        r="28" cx="32" cy="32"/>
+                            </svg>
+                            <span class="absolute text-xs font-bold text-white">${progressPercent}%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3.5">
+                    <div class="glass-panel p-4 rounded-2xl flex flex-col items-center text-center space-y-1.5 border border-white/5">
+                        <span class="text-[9px] font-bold uppercase tracking-wider text-slate-400">Sustainability Score</span>
+                        <p class="text-lg font-bold text-emerald-400">94 / 100</p>
+                    </div>
+                    <div class="glass-panel p-4 rounded-2xl flex flex-col items-center text-center space-y-1.5 border border-white/5">
+                        <span class="text-[9px] font-bold uppercase tracking-wider text-slate-400">Items Rescued</span>
+                        <p class="text-lg font-bold text-white">${cookedCount * 2} Items</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        /* NOTIFICATIONS & CHAT */
+        function toggleNotificationTray() {
+            document.getElementById('notification-tray').classList.toggle('hidden');
+        }
+        function clearAllNotifications() {
+            document.getElementById('notification-dot').classList.add('hidden');
+        }
+        function checkPantryExpirations() {
+            const dot = document.getElementById('notification-dot');
+            if (!dot) return;
+            const today = new Date();
+            today.setHours(0,0,0,0);
+            const expired = currentPantryItems.some(i => {
+                const parts = i.expiry_date.split('-');
+                const exp = new Date(parts[0], parts[1]-1, parts[2]);
+                return exp < today;
+            });
+            dot.classList.toggle('hidden', !expired);
+        }
+
+        /* KAI AI CHAT ENGINE */
+        async function sendChatMessage() {
+            const inputEl = document.getElementById('chat-input');
+            const chatContainer = document.getElementById('chat-messages');
+            if (!inputEl || !chatContainer) return;
+
+            const userMsg = inputEl.value.trim();
+            if (!userMsg) return;
+
+            appendChatMessage('user', userMsg);
+            inputEl.value = '';
+
+            const loadingId = 'loading-' + Date.now();
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = loadingId;
+            loadingDiv.className = "bg-white/[0.03] rounded-2xl p-3.5 border border-white/5 text-slate-400 max-w-[88%] self-start text-xs animate-pulse";
+            loadingDiv.innerText = "KAI is thinking...";
+            chatContainer.appendChild(loadingDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: userMsg,
+                        history: chatHistory,
+                        pantry: currentPantryItems
+                    })
+                });
+
+                document.getElementById(loadingId)?.remove();
+
+                if (response.ok) {
+                    const data = await response.json();
+
+                    if (data.history) chatHistory = data.history;
+
+                    if (data.reply) {
+                        appendChatMessage('assistant', data.reply);
+                    }
+
+                    if (data.wantsRecipe && (data.isRecipe || (data.missingIngredients && data.missingIngredients.length > 0))) {
+                        renderRecipeTriggerCard(data);
+                    }
+                } else {
+                    const errData = await response.json();
+                    appendChatMessage('assistant', errData?.error?.message || "KAI is having trouble processing that right now.");
+                }
+            } catch (err) {
+                document.getElementById(loadingId)?.remove();
+                console.error("Chat Error:", err);
+                appendChatMessage('assistant', "Sorry, I couldn't reach the server. Please check your connection!");
+            }
+        }
+
+        function renderRecipeTriggerCard(data) {
+    const chatContainer = document.getElementById('chat-messages');
+    if (!chatContainer) return;
+
+    const isRecipe = data.isRecipe;
+    const recipeTitle = data.recipeTitle || (data.pantryAlternative ? data.pantryAlternative.title : "Recipe Suggestion");
+    const ingredients = data.ingredients || [];
+    const missing = data.missingIngredients || [];
+    const steps = data.steps || [];
+
+    // Fallback: If AI provided no ingredients list at all, render fallback text
+    const combinedIngredients = Array.from(new Set([...ingredients, ...missing]));
+
+    const ingredientListHTML = combinedIngredients.length > 0 ? combinedIngredients.map(item => {
+        const isMissing = missing.some(m => item.toLowerCase().includes(m.toLowerCase()) || m.toLowerCase().includes(item.toLowerCase()));
+        return `
+            <li class="flex items-center justify-between text-[11px] py-1 border-b border-white/5 last:border-0">
+                <span class="flex items-center gap-1.5">
+                    <span class="${isMissing ? 'text-amber-400' : 'text-emerald-400'} font-bold">•</span>
+                    <span class="${isMissing ? 'text-slate-300' : 'text-slate-100'}">${item}</span>
+                </span>
+                ${isMissing 
+                    ? '<span class="text-[9px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">Missing</span>' 
+                    : '<span class="text-[9px] font-mono text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded border border-emerald-400/20">In Pantry</span>'}
+            </li>
+        `;
+    }).join('') : `<li class="text-[11px] text-slate-400 italic">No specific ingredient breakdown provided.</li>`;
+
+    const card = document.createElement('div');
+    card.className = "bg-slate-900/80 border border-white/10 rounded-2xl p-4 my-2 max-w-[95%] self-start space-y-3.5 shadow-2xl backdrop-blur-md animate-fade-in text-white";
+
+    card.innerHTML = `
+        <div class="border-b border-white/10 pb-3">
+            <div class="flex items-center justify-between gap-2 mb-1">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">🍳</span>
+                    <h4 class="font-bold text-sm text-white tracking-wide">${recipeTitle}</h4>
+                </div>
+                ${isRecipe 
+                    ? '<span class="text-[9px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">Ready to Cook</span>' 
+                    : '<span class="text-[9px] font-mono font-bold text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/20">Missing Items</span>'}
+            </div>
+            ${!isRecipe && data.pantryAlternative ? `
+                <p class="text-[11px] text-amber-300/90 mt-1 leading-snug">
+                    ⚠️ You're missing key items for this dish. Here is an alternative meal you can assemble with what's in your pantry right now!
+                </p>
+            ` : ''}
+        </div>
+
+        <div>
+            <p class="text-[10px] font-bold uppercase tracking-wider text-emerald-400 mb-2">Recipe Breakdown</p>
+            <ul class="space-y-0.5 bg-black/20 rounded-xl p-2.5 border border-white/5">
+                ${ingredientListHTML}
+            </ul>
+        </div>
+
+        <div class="pt-1 flex flex-col gap-2">
+            ${isRecipe ? `
+                <button id="btn-cook-now" class="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] py-2.5 px-3 rounded-xl uppercase tracking-wider transition active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/10">
+                    <span>🔥 Open Cooking Deck</span>
+                </button>
+            ` : ''}
+
+            ${missing.length > 0 ? `
+                <button id="btn-add-missing" class="w-full bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-[11px] py-2 px-3 rounded-xl transition active:scale-95 flex items-center justify-center gap-1.5">
+                    <span>🛒 Add Missing (${missing.length}) to Shopping List</span>
+                </button>
+            ` : ''}
+
+            ${!isRecipe && data.pantryAlternative ? `
+                <button id="btn-cook-alt" class="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] py-2.5 px-3 rounded-xl uppercase tracking-wider transition active:scale-95 flex items-center justify-center gap-2 shadow-lg">
+                    <span>🍳 Cook Alternative (${data.pantryAlternative.title})</span>
+                </button>
+            ` : ''}
+        </div>
+    `;
+
+    // Handler: Main Cooking Deck Button
+    const cookBtn = card.querySelector('#btn-cook-now');
+    if (cookBtn) {
+        cookBtn.onclick = () => {
+            openRecipeModal({
+                recipeTitle: recipeTitle,
+                ingredients: ingredients.length > 0 ? ingredients : combinedIngredients,
+                steps: steps
+            });
+        };
+    }
+
+    // Handler: Alternative Recipe Button
+    const altCookBtn = card.querySelector('#btn-cook-alt');
+    if (altCookBtn) {
+        altCookBtn.onclick = () => {
+            const altData = data.pantryAlternative || {};
+            const altIngredients = (altData.ingredients && altData.ingredients.length > 0)
+                ? altData.ingredients
+                : ingredients.filter(i => !missing.some(m => i.toLowerCase().includes(m.toLowerCase())));
+
+            openRecipeModal({
+                recipeTitle: altData.title || "Alternative Recipe",
+                ingredients: altIngredients,
+                steps: altData.steps || []
+            });
+        };
+    }
+
+    // Handler: Add Missing Items to Shopping List Button
+    const missingBtn = card.querySelector('#btn-add-missing');
+    if (missingBtn) {
+        missingBtn.onclick = async () => {
+            await fetch('/api/shopping-list/batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: missing })
+            });
+            showCustomAlert(`Added missing items to your shopping list:\n• ${missing.join('\n• ')}`, "Shopping List Updated", "🛒");
+        };
+    }
+
+    chatContainer.appendChild(card);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+        function appendChatMessage(role, text) {
+            const chatContainer = document.getElementById('chat-messages');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = role === 'user' 
+                ? "bg-white/10 border border-white/10 text-white rounded-2xl p-3.5 max-w-[88%] self-end text-xs"
+                : "bg-white/[0.03] rounded-2xl p-3.5 border border-white/5 text-slate-300 max-w-[88%] self-start text-xs leading-relaxed";
+            msgDiv.innerText = text;
+            chatContainer.appendChild(msgDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        /* INITIALIZATION */
+        window.addEventListener('DOMContentLoaded', () => {
+            fetchPantryItems();
+            document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendChatMessage();
+            });
+        });
+    </script>
+</body>
+</html>
