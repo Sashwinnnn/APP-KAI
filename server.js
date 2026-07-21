@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { GoogleGenAI, Type } from '@google/genai';
 import { initDatabase, getDbConnection } from './database.js';
 import 'dotenv/config';
@@ -14,17 +15,240 @@ console.log(`🔑 Checking API Key: Starts with: ${apiKey.slice(0, 6)}...`);
 
 const ai = new GoogleGenAI({ apiKey: apiKey });
 
-initDatabase().then(() => {
+/* ===================== AUTH: sessions & password hashing =====================
+   Self-contained (no new npm packages) so this can't break `npm install` on deploy.
+   Sessions are a signed cookie: base64url(json).signature — verified with HMAC,
+   never trusted blindly. Passwords are hashed with scrypt (Node built-in), never
+   stored in plain text. */
+
+const SESSION_SECRET = process.env.SESSION_SECRET || "kai-dev-secret-change-me";
+if (!process.env.SESSION_SECRET) {
+    console.warn("⚠️ SESSION_SECRET is not set — using an insecure default. Set SESSION_SECRET in your environment before real users sign up.");
+}
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function base64url(input) {
+    return Buffer.from(input).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function base64urlDecode(input) {
+    input = input.replace(/-/g, '+').replace(/_/g, '/');
+    while (input.length % 4) input += '=';
+    return Buffer.from(input, 'base64').toString('utf8');
+}
+
+function signSession(userId) {
+    const payload = JSON.stringify({ uid: userId, exp: Date.now() + SESSION_MAX_AGE_MS });
+    const encodedPayload = base64url(payload);
+    const signature = crypto.createHmac('sha256', SESSION_SECRET).update(encodedPayload).digest('hex');
+    return `${encodedPayload}.${signature}`;
+}
+
+function verifySession(token) {
+    if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+    const [encodedPayload, signature] = token.split('.');
+    const expectedSignature = crypto.createHmac('sha256', SESSION_SECRET).update(encodedPayload).digest('hex');
+    try {
+        const sigBuf = Buffer.from(signature, 'hex');
+        const expectedBuf = Buffer.from(expectedSignature, 'hex');
+        if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
+    } catch {
+        return null;
+    }
+    try {
+        const payload = JSON.parse(base64urlDecode(encodedPayload));
+        if (!payload.uid || !payload.exp || Date.now() > payload.exp) return null;
+        return payload.uid;
+    } catch {
+        return null;
+    }
+}
+
+function parseCookies(req) {
+    const header = req.headers.cookie;
+    const cookies = {};
+    if (!header) return cookies;
+    header.split(';').forEach(pair => {
+        const idx = pair.indexOf('=');
+        if (idx === -1) return;
+        const key = pair.slice(0, idx).trim();
+        const val = pair.slice(idx + 1).trim();
+        cookies[key] = decodeURIComponent(val);
+    });
+    return cookies;
+}
+
+function setSessionCookie(res, token) {
+    const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+    res.setHeader('Set-Cookie', `kai_session=${encodeURIComponent(token)}; HttpOnly; Path=/; Max-Age=${Math.floor(SESSION_MAX_AGE_MS / 1000)}; SameSite=Lax${secureFlag}`);
+}
+
+function clearSessionCookie(res) {
+    const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+    res.setHeader('Set-Cookie', `kai_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secureFlag}`);
+}
+
+function hashPassword(password, salt) {
+    return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+
+function verifyPassword(password, salt, hash) {
+    const attempt = hashPassword(password, salt);
+    try {
+        const attemptBuf = Buffer.from(attempt, 'hex');
+        const hashBuf = Buffer.from(hash, 'hex');
+        return attemptBuf.length === hashBuf.length && crypto.timingSafeEqual(attemptBuf, hashBuf);
+    } catch {
+        return false;
+    }
+}
+
+// Attaches req.userId if a valid session cookie is present, without blocking the request.
+function attachUser(req, res, next) {
+    const cookies = parseCookies(req);
+    const uid = verifySession(cookies.kai_session);
+    req.userId = uid || null;
+    next();
+}
+
+// Blocks the request entirely if there's no valid logged-in user.
+function requireAuth(req, res, next) {
+    if (!req.userId) {
+        return res.status(401).json({ error: "Not logged in." });
+    }
+    next();
+}
+
+app.use(attachUser);
+
+initDatabase().then(async () => {
     console.log("📂 Local SQLite kitchen database ready.");
+    const db = await getDbConnection();
+
+    // Users table for per-person accounts.
+    try {
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                created_at TEXT
+            )
+        `);
+    } catch (usersErr) {
+        console.warn("⚠️ Could not ensure users table exists:", usersErr.message);
+    }
+
+    // Lightweight migrations — wrapped individually so one failure doesn't block the rest.
+    // SQLite throws "duplicate column" if a column already exists, which we treat as a no-op.
+    const migrations = [
+        `ALTER TABLE shopping_list ADD COLUMN price REAL`,
+        `ALTER TABLE pantry ADD COLUMN user_id INTEGER`,
+        `ALTER TABLE shopping_list ADD COLUMN user_id INTEGER`,
+        `ALTER TABLE history ADD COLUMN user_id INTEGER`,
+        `ALTER TABLE recipe_logs ADD COLUMN user_id INTEGER`
+    ];
+    for (const sql of migrations) {
+        try {
+            await db.run(sql);
+            console.log(`🧾 Migration applied: ${sql}`);
+        } catch (migrationErr) {
+            if (!/duplicate column/i.test(migrationErr.message)) {
+                console.warn(`⚠️ Migration skipped (${sql}):`, migrationErr.message);
+            }
+        }
+    }
 }).catch(err => {
     console.error("❌ Error initializing kitchen DB:", err);
 });
 
-// GET: All pantry inventory
-app.get('/api/pantry', async (req, res) => {
+// ===================== AUTH ENDPOINTS =====================
+
+app.post('/api/auth/signup', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password || username.trim().length < 2 || password.length < 6) {
+            return res.status(400).json({ error: "Username (2+ chars) and password (6+ chars) are required." });
+        }
+        const cleanUsername = username.trim();
+
+        const db = await getDbConnection();
+        const existing = await db.get("SELECT id FROM users WHERE username = ? COLLATE NOCASE", [cleanUsername]);
+        if (existing) {
+            return res.status(409).json({ error: "That username is already taken." });
+        }
+
+        const salt = crypto.randomBytes(16).toString('hex');
+        const hash = hashPassword(password, salt);
+        const result = await db.run(
+            "INSERT INTO users (username, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?)",
+            [cleanUsername, hash, salt, new Date().toISOString()]
+        );
+        const newUserId = result.lastID;
+
+        // If this is the very first account, claim any pre-existing data (added before
+        // accounts existed) so the original user doesn't lose their pantry/list/history.
+        const userCount = await db.get("SELECT COUNT(*) as count FROM users");
+        if (userCount && userCount.count === 1) {
+            await db.run("UPDATE pantry SET user_id = ? WHERE user_id IS NULL", [newUserId]);
+            await db.run("UPDATE shopping_list SET user_id = ? WHERE user_id IS NULL", [newUserId]);
+            await db.run("UPDATE history SET user_id = ? WHERE user_id IS NULL", [newUserId]);
+            await db.run("UPDATE recipe_logs SET user_id = ? WHERE user_id IS NULL", [newUserId]);
+            console.log(`📦 Claimed pre-existing data for first account: ${cleanUsername}`);
+        }
+
+        setSessionCookie(res, signSession(newUserId));
+        res.status(201).json({ id: newUserId, username: cleanUsername });
+    } catch (err) {
+        console.error("❌ Error signing up:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) {
+            return res.status(400).json({ error: "Username and password are required." });
+        }
+
+        const db = await getDbConnection();
+        const user = await db.get("SELECT * FROM users WHERE username = ? COLLATE NOCASE", [username.trim()]);
+        if (!user || !verifyPassword(password, user.password_salt, user.password_hash)) {
+            return res.status(401).json({ error: "Incorrect username or password." });
+        }
+
+        setSessionCookie(res, signSession(user.id));
+        res.json({ id: user.id, username: user.username });
+    } catch (err) {
+        console.error("❌ Error logging in:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+    clearSessionCookie(res);
+    res.json({ success: true });
+});
+
+app.get('/api/auth/me', async (req, res) => {
+    if (!req.userId) return res.status(401).json({ error: "Not logged in." });
     try {
         const db = await getDbConnection();
-        const items = await db.all("SELECT * FROM pantry ORDER BY expiry_date ASC");
+        const user = await db.get("SELECT id, username FROM users WHERE id = ?", [req.userId]);
+        if (!user) return res.status(401).json({ error: "Not logged in." });
+        res.json(user);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+// GET: All pantry inventory
+app.get('/api/pantry', requireAuth, async (req, res) => {
+    try {
+        const db = await getDbConnection();
+        const items = await db.all("SELECT * FROM pantry WHERE user_id = ? ORDER BY expiry_date ASC", [req.userId]);
         res.json(items);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -32,7 +256,7 @@ app.get('/api/pantry', async (req, res) => {
 });
 
 // POST: Log a new food item
-app.post('/api/pantry', async (req, res) => {
+app.post('/api/pantry', requireAuth, async (req, res) => {
     const { name, quantity, expiry_date, added_date, storage } = req.body;
     
     if (!name || !expiry_date) {
@@ -42,14 +266,15 @@ app.post('/api/pantry', async (req, res) => {
     try {
         const db = await getDbConnection();
         await db.run(
-            `INSERT INTO pantry (name, quantity, expiry_date, added_date, storage) 
-             VALUES (?, ?, ?, ?, ?)`,
+            `INSERT INTO pantry (name, quantity, expiry_date, added_date, storage, user_id) 
+             VALUES (?, ?, ?, ?, ?, ?)`,
             [
                 name, 
                 quantity || '1 count', 
                 expiry_date, 
                 added_date || new Date().toISOString().split('T')[0], 
-                storage || 'Fridge'
+                storage || 'Fridge',
+                req.userId
             ]
         );
         res.status(201).json({ message: "Successfully logged item." });
@@ -57,8 +282,8 @@ app.post('/api/pantry', async (req, res) => {
         try {
             const db = await getDbConnection();
             await db.run(
-                "INSERT INTO pantry (name, quantity, expiry_date) VALUES (?, ?, ?)",
-                [name, quantity || '1 count', expiry_date]
+                "INSERT INTO pantry (name, quantity, expiry_date, user_id) VALUES (?, ?, ?, ?)",
+                [name, quantity || '1 count', expiry_date, req.userId]
             );
             res.status(201).json({ message: "Successfully logged item (legacy columns fallback)." });
         } catch (fallbackError) {
@@ -68,7 +293,7 @@ app.post('/api/pantry', async (req, res) => {
 });
 
 // 📸 POST: Analyze image with Gemini (Food/Pantry Scan)
-app.post('/api/pantry/scan', async (req, res) => {
+app.post('/api/pantry/scan', requireAuth, async (req, res) => {
     const { image } = req.body;
     if (!image) {
         return res.status(400).json({ error: "No image payload received." });
@@ -121,7 +346,7 @@ app.post('/api/pantry/scan', async (req, res) => {
 });
 
 // 💬 POST: Chat with Contextual AI Agent (Multi-Tier Fallback Edition)
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', requireAuth, async (req, res) => {
     try {
         const { message, history, pantry } = req.body;
 
@@ -351,11 +576,11 @@ STRICT DEDUPLICATION:
 });
 
 // DELETE: Remove single item
-app.delete('/api/pantry/:id', async (req, res) => {
+app.delete('/api/pantry/:id', requireAuth, async (req, res) => {
     const { id } = req.params;
     try {
         const db = await getDbConnection();
-        await db.run("DELETE FROM pantry WHERE id = ?", [id]);
+        await db.run("DELETE FROM pantry WHERE id = ? AND user_id = ?", [id, req.userId]);
         res.json({ message: "Item removed from system." });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -363,7 +588,7 @@ app.delete('/api/pantry/:id', async (req, res) => {
 });
 
 // BATCH-DELETE: Remove multiple items used in a recipe
-app.post('/api/pantry/batch-delete', async (req, res) => {
+app.post('/api/pantry/batch-delete', requireAuth, async (req, res) => {
     const { ids } = req.body; 
     if (!ids || !Array.isArray(ids)) {
         return res.status(400).json({ error: "Invalid or missing item IDs array." });
@@ -371,7 +596,7 @@ app.post('/api/pantry/batch-delete', async (req, res) => {
     try {
         const db = await getDbConnection();
         for (const id of ids) {
-            await db.run("DELETE FROM pantry WHERE id = ?", [id]);
+            await db.run("DELETE FROM pantry WHERE id = ? AND user_id = ?", [id, req.userId]);
         }
         res.json({ success: true, message: "Used ingredients cleared from inventory." });
     } catch (error) {
@@ -380,10 +605,10 @@ app.post('/api/pantry/batch-delete', async (req, res) => {
 });
 
 // GET: All recipe history
-app.get('/api/history', async (req, res) => {
+app.get('/api/history', requireAuth, async (req, res) => {
     try {
         const db = await getDbConnection();
-        const rows = await db.all("SELECT * FROM history ORDER BY cooked_date DESC, id DESC");
+        const rows = await db.all("SELECT * FROM history WHERE user_id = ? ORDER BY cooked_date DESC, id DESC", [req.userId]);
         res.json(rows);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -391,7 +616,7 @@ app.get('/api/history', async (req, res) => {
 });
 
 // POST: Log history of a completed meal (with recipe logs)
-app.post('/api/history', async (req, res) => {
+app.post('/api/history', requireAuth, async (req, res) => {
     const { recipe_name, ingredients_used, recipe_steps, time_taken_minutes } = req.body;
     if (!recipe_name) return res.status(400).json({ error: "Missing recipe name." });
     
@@ -399,13 +624,13 @@ app.post('/api/history', async (req, res) => {
         const db = await getDbConnection();
         
         await db.run(
-            "INSERT INTO history (recipe_name, ingredients_used) VALUES (?, ?)",
-            [recipe_name, ingredients_used || '']
+            "INSERT INTO history (recipe_name, ingredients_used, user_id) VALUES (?, ?, ?)",
+            [recipe_name, ingredients_used || '', req.userId]
         );
         
         await db.run(
-            "INSERT INTO recipe_logs (recipe_name, recipe_steps, ingredients_used, time_taken_minutes) VALUES (?, ?, ?, ?)",
-            [recipe_name, recipe_steps || '', ingredients_used || '', time_taken_minutes || 0]
+            "INSERT INTO recipe_logs (recipe_name, recipe_steps, ingredients_used, time_taken_minutes, user_id) VALUES (?, ?, ?, ?, ?)",
+            [recipe_name, recipe_steps || '', ingredients_used || '', time_taken_minutes || 0, req.userId]
         );
         
         res.json({ success: true });
@@ -415,11 +640,11 @@ app.post('/api/history', async (req, res) => {
 });
 
 // DELETE: Remove a history record
-app.delete('/api/history/:id', async (req, res) => {
+app.delete('/api/history/:id', requireAuth, async (req, res) => {
     const { id } = req.params;
     try {
         const db = await getDbConnection();
-        await db.run("DELETE FROM history WHERE id = ?", [id]);
+        await db.run("DELETE FROM history WHERE id = ? AND user_id = ?", [id, req.userId]);
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -429,10 +654,10 @@ app.delete('/api/history/:id', async (req, res) => {
 // 🛒 SHOPPING LIST ENDPOINTS
 
 // GET: Fetch all shopping list items (organized by category)
-app.get('/api/shopping-list', async (req, res) => {
+app.get('/api/shopping-list', requireAuth, async (req, res) => {
     try {
         const db = await getDbConnection();
-        const rows = await db.all(`SELECT * FROM shopping_list ORDER BY category, added_date DESC`);
+        const rows = await db.all(`SELECT * FROM shopping_list WHERE user_id = ? ORDER BY category, added_date DESC`, [req.userId]);
         res.json(rows);
     } catch (err) {
         console.error("❌ Error fetching shopping list:", err);
@@ -441,18 +666,18 @@ app.get('/api/shopping-list', async (req, res) => {
 });
 
 // POST: Manually add single item to shopping list
-app.post('/api/shopping-list', async (req, res) => {
+app.post('/api/shopping-list', requireAuth, async (req, res) => {
     try {
-        const { name, quantity, category, is_essential } = req.body;
+        const { name, quantity, category, is_essential, price } = req.body;
         if (!name) return res.status(400).json({ error: "Item name is required" });
 
         const db = await getDbConnection();
         const result = await db.run(
-            `INSERT INTO shopping_list (name, quantity, category, is_essential) VALUES (?, ?, ?, ?)`,
-            [name, quantity || '1', category || 'Custom Items', is_essential ? 1 : 0]
+            `INSERT INTO shopping_list (name, quantity, category, is_essential, price, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+            [name, quantity || '1', category || 'Custom Items', is_essential ? 1 : 0, (price !== undefined && price !== '' && price !== null) ? Number(price) : null, req.userId]
         );
         
-        res.json({ id: result.lastID, name, quantity: quantity || '1', category: category || 'Custom Items', is_essential: is_essential ? 1 : 0 });
+        res.json({ id: result.lastID, name, quantity: quantity || '1', category: category || 'Custom Items', is_essential: is_essential ? 1 : 0, price: price || null });
     } catch (err) {
         console.error("❌ Error adding item:", err);
         res.status(500).json({ error: err.message });
@@ -460,7 +685,7 @@ app.post('/api/shopping-list', async (req, res) => {
 });
 
 // POST: Batch add missing ingredients from chat
-app.post('/api/shopping-list/batch', async (req, res) => {
+app.post('/api/shopping-list/batch', requireAuth, async (req, res) => {
     try {
         const { items } = req.body; 
         
@@ -472,8 +697,8 @@ app.post('/api/shopping-list/batch', async (req, res) => {
         
         for (const item of items) {
             await db.run(
-                `INSERT INTO shopping_list (name, quantity, category, is_essential) VALUES (?, ?, ?, ?)`,
-                [item, '1', 'Recipe Essentials', 1]
+                `INSERT INTO shopping_list (name, quantity, category, is_essential, user_id) VALUES (?, ?, ?, ?, ?)`,
+                [item, '1', 'Recipe Essentials', 1, req.userId]
             );
         }
         
@@ -485,10 +710,10 @@ app.post('/api/shopping-list/batch', async (req, res) => {
 });
 
 // PUT: Update shopping list item
-app.put('/api/shopping-list/:id', async (req, res) => {
+app.put('/api/shopping-list/:id', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
-        const { is_checked, is_essential, quantity } = req.body;
+        const { is_checked, is_essential, quantity, price } = req.body;
         const db = await getDbConnection();
 
         let updateFields = [];
@@ -506,14 +731,18 @@ app.put('/api/shopping-list/:id', async (req, res) => {
             updateFields.push("quantity = ?");
             values.push(quantity);
         }
+        if (price !== undefined) {
+            updateFields.push("price = ?");
+            values.push(price === '' || price === null ? null : Number(price));
+        }
 
         if (updateFields.length === 0) {
             return res.status(400).json({ error: "No fields to update" });
         }
 
-        values.push(id);
+        values.push(id, req.userId);
         await db.run(
-            `UPDATE shopping_list SET ${updateFields.join(", ")} WHERE id = ?`,
+            `UPDATE shopping_list SET ${updateFields.join(", ")} WHERE id = ? AND user_id = ?`,
             values
         );
 
@@ -525,12 +754,12 @@ app.put('/api/shopping-list/:id', async (req, res) => {
 });
 
 // DELETE: Remove shopping list item
-app.delete('/api/shopping-list/:id', async (req, res) => {
+app.delete('/api/shopping-list/:id', requireAuth, async (req, res) => {
     try {
         const { id } = req.params;
         const db = await getDbConnection();
         
-        await db.run(`DELETE FROM shopping_list WHERE id = ?`, [id]);
+        await db.run(`DELETE FROM shopping_list WHERE id = ? AND user_id = ?`, [id, req.userId]);
         res.json({ message: "Item removed from shopping list", id });
     } catch (err) {
         console.error("❌ Error removing shopping list item:", err);
@@ -539,11 +768,11 @@ app.delete('/api/shopping-list/:id', async (req, res) => {
 });
 
 // POST: Move checked items from shopping list to pantry
-app.post('/api/shopping-list/checkout', async (req, res) => {
+app.post('/api/shopping-list/checkout', requireAuth, async (req, res) => {
     try {
         const db = await getDbConnection();
 
-        const allItems = await db.all("SELECT * FROM shopping_list");
+        const allItems = await db.all("SELECT * FROM shopping_list WHERE user_id = ?", [req.userId]);
         // Filter in JS instead of relying on a SQL "= 1" comparison, since the
         // checked flag can come back as 1, true, or "1" depending on driver/schema.
         const checkedItems = allItems.filter(item => {
@@ -566,16 +795,16 @@ app.post('/api/shopping-list/checkout', async (req, res) => {
         for (const item of checkedItems) {
             try {
                 await db.run(
-                    `INSERT INTO pantry (name, quantity, expiry_date, added_date, storage) VALUES (?, ?, ?, ?, ?)`,
-                    [item.name, item.quantity || '1', expiryDate, today, 'Pantry']
+                    `INSERT INTO pantry (name, quantity, expiry_date, added_date, storage, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+                    [item.name, item.quantity || '1', expiryDate, today, 'Pantry', req.userId]
                 );
                 movedIds.push(item.id);
             } catch (insertErr) {
                 // Legacy schema fallback — mirrors the fallback used in POST /api/pantry.
                 try {
                     await db.run(
-                        "INSERT INTO pantry (name, quantity, expiry_date) VALUES (?, ?, ?)",
-                        [item.name, item.quantity || '1', expiryDate]
+                        "INSERT INTO pantry (name, quantity, expiry_date, user_id) VALUES (?, ?, ?, ?)",
+                        [item.name, item.quantity || '1', expiryDate, req.userId]
                     );
                     movedIds.push(item.id);
                 } catch (fallbackErr) {
@@ -587,7 +816,7 @@ app.post('/api/shopping-list/checkout', async (req, res) => {
 
         // Only clear the items that actually made it into the pantry.
         for (const id of movedIds) {
-            await db.run("DELETE FROM shopping_list WHERE id = ?", [id]);
+            await db.run("DELETE FROM shopping_list WHERE id = ? AND user_id = ?", [id, req.userId]);
         }
 
         res.json({
@@ -605,7 +834,7 @@ app.post('/api/shopping-list/checkout', async (req, res) => {
 });
 
 // 📸 POST: Multi-modal Receipt Scan parsing
-app.post('/api/pantry/scan-receipt', async (req, res) => {
+app.post('/api/pantry/scan-receipt', requireAuth, async (req, res) => {
     try {
         const { imageBase64 } = req.body; 
         if (!imageBase64) return res.status(400).json({ error: "No receipt image data received." });
@@ -648,26 +877,96 @@ app.post('/api/pantry/scan-receipt', async (req, res) => {
     }
 });
 
-// POST: Budget trimmer - ask KAI to trim shopping list
-app.post('/api/shopping-list/trim', async (req, res) => {
+// POST: Budget trimmer - figures out what fits in budget using real (or estimated) prices
+app.post('/api/shopping-list/trim', requireAuth, async (req, res) => {
     try {
         const { budget, items } = req.body;
-        if (!budget || !items || items.length === 0) {
-            return res.status(400).json({ error: "Budget and items required" });
+        const budgetNum = Number(budget);
+        if (!budgetNum || budgetNum <= 0 || !items || items.length === 0) {
+            return res.status(400).json({ error: "A positive budget and at least one item are required" });
         }
 
-        const itemsList = items.map(i => `- ${i.name} (${i.quantity})`).join('\n');
-        
-        const response = await ai.models.generateContent({
-            model: "gemini-3.5-flash",
-            contents: [{
-                text: `You are a smart shopping budget advisor. The user has a budget of $${budget} and wants to buy these items:\n\n${itemsList}\n\nWhich items are ESSENTIAL and which can be skipped to stay under budget? Return a JSON object with "essential" and "optional" arrays of item names.`
-            }],
-            config: { responseMimeType: "application/json" }
+        // Items the user already priced don't need AI involvement at all.
+        const pricedItems = items.filter(i => i.price !== null && i.price !== undefined && i.price !== '' && !isNaN(Number(i.price)));
+        const unpricedItems = items.filter(i => !pricedItems.includes(i));
+
+        let estimates = {}; // name -> { estimatedPrice, essential }
+
+        if (unpricedItems.length > 0) {
+            const itemsList = unpricedItems.map(i => `- ${i.name} (qty: ${i.quantity || '1'})`).join('\n');
+            const response = await ai.models.generateContent({
+                model: "gemini-3.5-flash",
+                contents: [{
+                    text: `You are a grocery pricing assistant. For each item below, give your best realistic estimate of its typical US grocery store price for the given quantity, and whether it's a kitchen essential (staple, protein, core ingredient) vs a nice-to-have/optional item.\n\n${itemsList}\n\nBe realistic and specific with prices — no rounding to guesses like $5 for everything.`
+                }],
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            items: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        name: { type: Type.STRING },
+                                        estimatedPrice: { type: Type.NUMBER, description: "Realistic USD price estimate for this item at the given quantity." },
+                                        essential: { type: Type.BOOLEAN }
+                                    },
+                                    required: ["name", "estimatedPrice", "essential"]
+                                }
+                            }
+                        },
+                        required: ["items"]
+                    }
+                }
+            });
+
+            const parsed = JSON.parse(response.text);
+            (parsed.items || []).forEach(i => {
+                estimates[i.name.trim().toLowerCase()] = { estimatedPrice: i.estimatedPrice, essential: !!i.essential };
+            });
+        }
+
+        // Build a single priced list combining user-entered prices and AI estimates.
+        const fullList = items.map(item => {
+            const userPrice = pricedItems.includes(item) ? Number(item.price) : null;
+            const est = estimates[item.name.trim().toLowerCase()];
+            return {
+                name: item.name,
+                quantity: item.quantity || '1',
+                price: userPrice !== null ? userPrice : (est ? est.estimatedPrice : 0),
+                priceIsEstimate: userPrice === null,
+                essential: item.is_essential ? true : (est ? est.essential : false)
+            };
         });
 
-        const advice = JSON.parse(response.text);
-        res.json(advice);
+        // Deterministic keep/cut logic — always correct math, never left to the model to add up.
+        const essentials = fullList.filter(i => i.essential);
+        const optional = fullList.filter(i => !i.essential).sort((a, b) => a.price - b.price);
+
+        const essentialsCost = essentials.reduce((sum, i) => sum + i.price, 0);
+        const keep = [...essentials];
+        const cut = [];
+        let runningTotal = essentialsCost;
+
+        for (const item of optional) {
+            if (runningTotal + item.price <= budgetNum) {
+                keep.push(item);
+                runningTotal += item.price;
+            } else {
+                cut.push(item);
+            }
+        }
+
+        res.json({
+            budget: budgetNum,
+            estimatedTotal: Math.round(runningTotal * 100) / 100,
+            fullListTotal: Math.round(fullList.reduce((s, i) => s + i.price, 0) * 100) / 100,
+            overBudgetWithEssentialsAlone: essentialsCost > budgetNum,
+            keep,
+            cut
+        });
     } catch (err) {
         console.error("❌ Error trimming list:", err);
         res.status(500).json({ error: err.message });
