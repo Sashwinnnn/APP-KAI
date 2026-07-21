@@ -2,8 +2,23 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>KAI - Kitchen AI</title>
+
+    <!-- PWA: launch full-screen from the home screen, no browser chrome -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="KAI">
+    <meta name="theme-color" content="#020617">
+
+    <!-- App icons -->
+    <link rel="icon" href="/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+
+    <!-- Web App Manifest (Android/Chrome install) -->
+    <link rel="manifest" href="/manifest.json">
+
     <!-- Tailwind CSS via CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
    <style>
@@ -94,12 +109,41 @@
 </head>
 <body class="bg-slate-950 text-slate-100 pb-36 min-h-screen flex flex-col items-center selection:bg-slate-700/50">
 
+    <!-- AUTH GATE: shown until a valid session is confirmed -->
+    <div id="auth-gate" class="fixed inset-0 z-50 bg-slate-950 flex flex-col items-center justify-center px-6">
+        <span class="font-black text-3xl tracking-[0.3em] text-emerald-50 drop-shadow-[0_0_14px_rgba(16,185,129,0.45)] select-none mb-8">
+            KAI
+        </span>
+
+        <div class="w-full max-w-sm glass-panel rounded-3xl p-6 space-y-4">
+            <div class="flex bg-white/[0.04] border border-white/10 rounded-xl p-1 gap-1">
+                <button id="auth-tab-login" onclick="switchAuthTab('login')" class="flex-1 py-2 rounded-lg text-xs font-bold transition bg-white/10 text-white">Log In</button>
+                <button id="auth-tab-signup" onclick="switchAuthTab('signup')" class="flex-1 py-2 rounded-lg text-xs font-bold transition text-slate-400">Sign Up</button>
+            </div>
+
+            <p class="text-xs text-slate-400 text-center leading-relaxed">Your own pantry, shopping list, and history — separate from anyone else using this app.</p>
+
+            <div class="space-y-2.5">
+                <input type="text" id="auth-username" placeholder="Username" autocomplete="username" class="w-full bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 transition">
+                <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password" class="w-full bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 transition">
+            </div>
+
+            <p id="auth-error" class="hidden text-xs text-rose-400 text-center"></p>
+
+            <button id="auth-submit-btn" onclick="submitAuthForm()" class="w-full liquid-glass-button text-white font-bold text-sm py-3 rounded-xl transition active:scale-95">
+                Log In
+            </button>
+        </div>
+    </div>
+
     <!-- MAIN APP CONTAINER -->
     <div class="w-full max-w-lg px-6 flex flex-col flex-1">
 
         <!-- APP HEADER BAR -->
         <header class="pt-8 pb-4 flex items-center justify-between w-full relative">
-            <div class="w-10"></div>
+            <button onclick="handleLogoutClick()" class="w-10 h-10 flex items-center justify-center rounded-2xl text-slate-400 hover:text-white hover:bg-white/5 transition active:scale-90" title="Log out">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+            </button>
             <span class="font-black text-2xl tracking-[0.3em] text-emerald-50 drop-shadow-[0_0_14px_rgba(16,185,129,0.45)] select-none pl-2">
                 KAI
             </span>
@@ -113,6 +157,20 @@
                 </button>
             </div>
         </header>
+
+        <!-- PWA INSTALL BANNER -->
+        <div id="install-banner" class="hidden mb-4 glass-panel rounded-2xl p-3.5 flex items-center gap-3 animate-fade-in">
+            <div class="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center shrink-0 text-base">
+                📲
+            </div>
+            <div class="flex-1 min-w-0">
+                <p id="install-banner-text" class="text-xs font-semibold text-white leading-snug">Install KAI as an app for the full-screen experience.</p>
+            </div>
+            <button id="install-banner-action" onclick="handleInstallBannerAction()" class="shrink-0 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] px-3.5 py-2 rounded-xl transition active:scale-95">
+                Install
+            </button>
+            <button onclick="dismissInstallBanner()" class="shrink-0 text-slate-500 hover:text-white text-sm px-1 transition">✕</button>
+        </div>
 
         <!-- UNIVERSAL GLASS ALERT / NOTIFICATION MODAL -->
         <div id="universal-alert-modal" class="modal-backdrop hidden">
@@ -196,6 +254,7 @@
 
                     <div class="flex gap-2.5">
                         <input type="text" id="shopping-input" placeholder="Add item (e.g., Almond Milk)..." class="flex-1 bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-500 transition">
+                        <input type="number" step="0.01" min="0" id="shopping-price-input" placeholder="$ (optional)" class="w-24 bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-500 transition">
                         <button onclick="addShoppingItem()" class="liquid-glass-button text-white px-5 rounded-xl font-bold text-xs active:scale-95 transition">Add</button>
                     </div>
 
@@ -208,6 +267,7 @@
                             <span>AI Trim</span> ✨
                         </button>
                     </div>
+                    <p id="shopping-total-hint" class="text-[10px] text-slate-500 px-1 -mt-2"></p>
 
                     <div id="shopping-list-container" class="space-y-2.5 pt-2"></div>
                 </div>
@@ -653,6 +713,7 @@
         /* SHOPPING LIST */
         async function loadShoppingList() {
             const container = document.getElementById('shopping-list-container');
+            const totalHint = document.getElementById('shopping-total-hint');
             if (!container) return;
             
             try {
@@ -661,11 +722,18 @@
                 
                 if (items.length === 0) {
                     container.innerHTML = `<p class="text-xs text-slate-500 text-center py-6">Shopping list is empty.</p>`;
+                    if (totalHint) totalHint.innerText = '';
                     return;
                 }
 
                 container.innerHTML = '';
+                let pricedTotal = 0;
+                let pricedCount = 0;
                 items.forEach(item => {
+                    if (item.price !== null && item.price !== undefined) {
+                        pricedTotal += Number(item.price);
+                        pricedCount++;
+                    }
                     const el = document.createElement('div');
                     el.className = `p-3.5 rounded-2xl flex items-center justify-between text-xs ${item.is_checked ? 'bg-white/2 opacity-50' : 'bg-white/5 border border-white/5'}`;
                     el.innerHTML = `
@@ -676,28 +744,58 @@
                                 <span class="text-[10px] text-slate-400">Qty: ${item.quantity || '1'}</span>
                             </div>
                         </div>
-                        <button onclick="deleteShoppingItem(${item.id})" class="p-1.5 hover:bg-rose-500/20 rounded-lg text-slate-400 hover:text-rose-400 transition">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                        </button>
+                        <div class="flex items-center gap-2">
+                            <div class="flex items-center gap-0.5 bg-black/30 border border-white/10 rounded-lg px-1.5">
+                                <span class="text-[10px] text-slate-500">$</span>
+                                <input type="number" step="0.01" min="0" value="${item.price !== null && item.price !== undefined ? item.price : ''}" placeholder="--"
+                                    onchange="updateShoppingItemPrice(${item.id}, this.value)"
+                                    class="w-14 bg-transparent text-white text-[11px] py-1.5 outline-none">
+                            </div>
+                            <button onclick="deleteShoppingItem(${item.id})" class="p-1.5 hover:bg-rose-500/20 rounded-lg text-slate-400 hover:text-rose-400 transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                            </button>
+                        </div>
                     `;
                     container.appendChild(el);
                 });
+
+                if (totalHint) {
+                    if (pricedCount === items.length) {
+                        totalHint.innerText = `Priced total: $${pricedTotal.toFixed(2)}`;
+                    } else if (pricedCount > 0) {
+                        totalHint.innerText = `Priced total so far: $${pricedTotal.toFixed(2)} (${items.length - pricedCount} item${items.length - pricedCount === 1 ? '' : 's'} unpriced — AI Trim will estimate them)`;
+                    } else {
+                        totalHint.innerText = `No prices entered yet — AI Trim will estimate them for you.`;
+                    }
+                }
             } catch (e) {
                 console.error("Error loading shopping list:", e);
             }
         }
 
+        async function updateShoppingItemPrice(id, price) {
+            await fetch(`/api/shopping-list/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ price: price === '' ? null : Number(price) })
+            });
+            loadShoppingList();
+        }
+
         async function addShoppingItem() {
             const input = document.getElementById('shopping-input');
+            const priceInput = document.getElementById('shopping-price-input');
             const name = input.value.trim();
             if (!name) return;
+            const price = priceInput.value.trim();
 
             await fetch('/api/shopping-list', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, category: 'Custom Items' })
+                body: JSON.stringify({ name, category: 'Custom Items', price: price === '' ? null : Number(price) })
             });
             input.value = '';
+            priceInput.value = '';
             loadShoppingList();
         }
 
@@ -742,7 +840,7 @@
 
         async function trimShoppingListWithAI() {
             const budget = document.getElementById('budget-input').value;
-            if (!budget) {
+            if (!budget || Number(budget) <= 0) {
                 showCustomAlert("Please enter a target budget first.", "Budget Required", "💡");
                 return;
             }
@@ -751,16 +849,53 @@
             const items = await res.json();
             if (items.length === 0) return;
 
-            const trimRes = await fetch('/api/shopping-list/trim', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ budget, items })
-            });
-            const advice = await trimRes.json();
-            
-            if (advice.essential) {
-                showCustomAlert(`Essentials:\n${advice.essential.join(', ')}\n\nOptional:\n${(advice.optional || []).join(', ')}`, `AI Budget Advice ($${budget})`, "✨");
+            let trimRes, advice;
+            try {
+                trimRes = await fetch('/api/shopping-list/trim', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ budget, items })
+                });
+                advice = await trimRes.json();
+            } catch (e) {
+                showCustomAlert("Couldn't reach the server to run the budget check.", "Error", "⚠️");
+                return;
             }
+
+            if (!trimRes.ok) {
+                showCustomAlert(advice?.error || "Couldn't calculate a budget breakdown.", "Error", "⚠️");
+                return;
+            }
+
+            const fmt = (n) => `$${Number(n).toFixed(2)}`;
+            const estimateNote = (i) => i.priceIsEstimate ? ' (est.)' : '';
+
+            if (advice.cut.length === 0) {
+                showCustomAlert(
+                    `Everything fits! Estimated total ${fmt(advice.estimatedTotal)} of your ${fmt(advice.budget)} budget.`,
+                    "You're Under Budget", "✅"
+                );
+                return;
+            }
+
+            if (advice.overBudgetWithEssentialsAlone) {
+                showCustomAlert(
+                    `Even just your essentials come to ${fmt(advice.estimatedTotal)}, over your ${fmt(advice.budget)} budget. Consider swapping a pricier essential or raising your budget.`,
+                    "Essentials Alone Exceed Budget", "⚠️"
+                );
+                return;
+            }
+
+            const cutLines = advice.cut.map(i => `• ${i.name} — ${fmt(i.price)}${estimateNote(i)}`).join('\n');
+            const message = `Full list comes to ${fmt(advice.fullListTotal)} — over your ${fmt(advice.budget)} budget.\n\nCut these ${advice.cut.length} item(s) to fit (new total ${fmt(advice.estimatedTotal)}):\n${cutLines}`;
+
+            showCustomConfirm(message, async () => {
+                for (const item of advice.cut) {
+                    const match = items.find(i => i.name === item.name);
+                    if (match) await deleteShoppingItem(match.id);
+                }
+                showCustomAlert(`Removed ${advice.cut.length} item(s). New estimated total: ${fmt(advice.estimatedTotal)}.`, "List Trimmed", "✂️");
+            }, `Over Budget by ${fmt(advice.fullListTotal - advice.budget)}`);
         }
 
         /* PANTRY INVENTORY & CAMERA MANAGEMENT */
@@ -1479,11 +1614,173 @@
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
+        /* PWA INSTALL PROMPT */
+        let deferredInstallPrompt = null;
+
+        function isRunningStandalone() {
+            return window.matchMedia('(display-mode: standalone)').matches
+                || window.navigator.standalone === true; // iOS Safari flag
+        }
+
+        function isIOSDevice() {
+            return /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+        }
+
+        function initInstallBanner() {
+            if (isRunningStandalone()) return; // already installed, don't nag
+            if (localStorage.getItem('kai-install-dismissed') === 'true') return;
+
+            const banner = document.getElementById('install-banner');
+            const textEl = document.getElementById('install-banner-text');
+            const actionBtn = document.getElementById('install-banner-action');
+            if (!banner) return;
+
+            if (isIOSDevice()) {
+                // Safari doesn't support beforeinstallprompt — show manual steps instead.
+                textEl.innerText = "Install KAI: tap Share ⬆️ then \"Add to Home Screen\".";
+                actionBtn.classList.add('hidden');
+                banner.classList.remove('hidden');
+            } else {
+                // Android/Chrome: wait for the native install prompt to become available.
+                window.addEventListener('beforeinstallprompt', (e) => {
+                    e.preventDefault();
+                    deferredInstallPrompt = e;
+                    textEl.innerText = "Install KAI as an app for the full-screen experience.";
+                    actionBtn.classList.remove('hidden');
+                    banner.classList.remove('hidden');
+                });
+            }
+        }
+
+        async function handleInstallBannerAction() {
+            if (!deferredInstallPrompt) return;
+            deferredInstallPrompt.prompt();
+            const { outcome } = await deferredInstallPrompt.userChoice;
+            deferredInstallPrompt = null;
+            if (outcome === 'accepted') {
+                document.getElementById('install-banner')?.classList.add('hidden');
+            }
+        }
+
+        function dismissInstallBanner() {
+            document.getElementById('install-banner')?.classList.add('hidden');
+            localStorage.setItem('kai-install-dismissed', 'true');
+        }
+
+        /* SERVICE WORKER — required for real PWA installability (native browser
+           install prompt + Play Store packaging via PWABuilder/TWA) */
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch((err) => {
+                    console.warn('KAI: service worker registration failed', err);
+                });
+            });
+        }
+
+        /* AUTH */
+        let authMode = 'login';
+        let currentUser = null;
+
+        function switchAuthTab(mode) {
+            authMode = mode;
+            const loginTab = document.getElementById('auth-tab-login');
+            const signupTab = document.getElementById('auth-tab-signup');
+            const submitBtn = document.getElementById('auth-submit-btn');
+            const errorEl = document.getElementById('auth-error');
+            errorEl.classList.add('hidden');
+
+            if (mode === 'login') {
+                loginTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition bg-white/10 text-white";
+                signupTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition text-slate-400";
+                submitBtn.innerText = "Log In";
+                document.getElementById('auth-password').setAttribute('autocomplete', 'current-password');
+            } else {
+                signupTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition bg-white/10 text-white";
+                loginTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition text-slate-400";
+                submitBtn.innerText = "Sign Up";
+                document.getElementById('auth-password').setAttribute('autocomplete', 'new-password');
+            }
+        }
+
+        async function submitAuthForm() {
+            const username = document.getElementById('auth-username').value.trim();
+            const password = document.getElementById('auth-password').value;
+            const errorEl = document.getElementById('auth-error');
+            const submitBtn = document.getElementById('auth-submit-btn');
+            errorEl.classList.add('hidden');
+
+            if (!username || !password) {
+                errorEl.innerText = "Enter a username and password.";
+                errorEl.classList.remove('hidden');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            const originalLabel = submitBtn.innerText;
+            submitBtn.innerText = "Please wait...";
+
+            try {
+                const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/signup';
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    errorEl.innerText = data?.error || "Something went wrong.";
+                    errorEl.classList.remove('hidden');
+                    return;
+                }
+
+                currentUser = data;
+                document.getElementById('auth-gate').classList.add('hidden');
+                initApp();
+            } catch (e) {
+                errorEl.innerText = "Couldn't reach the server. Please check your connection.";
+                errorEl.classList.remove('hidden');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerText = originalLabel;
+            }
+        }
+
+        function handleLogoutClick() {
+            if (!currentUser) return;
+            showCustomConfirm(`Log out of ${currentUser.username}'s account?`, async () => {
+                await fetch('/api/auth/logout', { method: 'POST' });
+                window.location.reload();
+            }, "Log Out");
+        }
+
+        async function checkAuthAndInit() {
+            try {
+                const res = await fetch('/api/auth/me');
+                if (res.ok) {
+                    currentUser = await res.json();
+                    document.getElementById('auth-gate').classList.add('hidden');
+                    initApp();
+                }
+                // If not ok, the auth gate is already visible by default — nothing else to do.
+            } catch (e) {
+                console.error("Auth check failed:", e);
+            }
+        }
+
         /* INITIALIZATION */
-        window.addEventListener('DOMContentLoaded', () => {
+        function initApp() {
             fetchPantryItems();
+            initInstallBanner();
             document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') sendChatMessage();
+            });
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            checkAuthAndInit();
+            document.getElementById('auth-password')?.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') submitAuthForm();
             });
         });
     </script>
