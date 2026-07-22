@@ -130,7 +130,7 @@ app.use(attachUser);
    and it's time to move to billed usage, not a UX choice to fudge. */
 const SHARED_DAILY_AI_BUDGET = Number(process.env.SHARED_DAILY_AI_BUDGET) || 1400;
 
-async function enforceDailyAiLimit(req, res, next) {
+async function checkDailyLimitOnly(req, res, next) {
     try {
         const db = await getDbConnection();
         const today = new Date().toISOString().split('T')[0];
@@ -139,17 +139,12 @@ async function enforceDailyAiLimit(req, res, next) {
         const totalUsers = Math.max(userCountRow?.count || 1, 1);
         const perUserLimitToday = Math.max(1, Math.floor(SHARED_DAILY_AI_BUDGET / totalUsers));
 
-        await db.run(
-            `INSERT INTO daily_usage (user_id, usage_date, count) VALUES (?, ?, 1)
-             ON CONFLICT(user_id, usage_date) DO UPDATE SET count = count + 1`,
-            [req.userId, today]
-        );
         const row = await db.get(
             `SELECT count FROM daily_usage WHERE user_id = ? AND usage_date = ?`,
             [req.userId, today]
         );
 
-        if (row && row.count > perUserLimitToday) {
+        if (row && row.count >= perUserLimitToday) {
             return res.status(429).json({
                 error: `You've hit today's AI usage limit (${perUserLimitToday} requests — your even share of today's shared quota across ${totalUsers} user${totalUsers === 1 ? '' : 's'}). This resets tomorrow.`
             });
@@ -158,6 +153,24 @@ async function enforceDailyAiLimit(req, res, next) {
     } catch (err) {
         console.error("⚠️ Daily usage check failed, allowing request through:", err.message);
         next(); // fail open — a broken counter shouldn't take down the whole app
+    }
+}
+
+// Call this AFTER the real work, with the actual number of Gemini calls made —
+// so a request that internally retried 3 models costs 3, and a request that
+// made zero AI calls (e.g. trim with all prices already user-entered) costs 0.
+async function recordAiUsage(userId, callCount) {
+    if (!callCount || callCount <= 0) return;
+    try {
+        const db = await getDbConnection();
+        const today = new Date().toISOString().split('T')[0];
+        await db.run(
+            `INSERT INTO daily_usage (user_id, usage_date, count) VALUES (?, ?, ?)
+             ON CONFLICT(user_id, usage_date) DO UPDATE SET count = count + ?`,
+            [userId, today, callCount, callCount]
+        );
+    } catch (err) {
+        console.error("⚠️ Failed to record AI usage:", err.message);
     }
 }
 
@@ -219,8 +232,28 @@ initDatabase().then(async () => {
 
 // ===================== AUTH ENDPOINTS =====================
 
+// Lightweight in-memory throttle: since the AI budget is split by total user
+// count, unlimited signups would let anyone dilute everyone else's daily
+// quota to nothing just by scripting fake accounts. Caps signups per IP.
+const signupAttempts = new Map(); // ip -> [timestamps]
+const SIGNUP_MAX_PER_WINDOW = 5;
+const SIGNUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+function isSignupRateLimited(ip) {
+    const now = Date.now();
+    const attempts = (signupAttempts.get(ip) || []).filter(t => now - t < SIGNUP_WINDOW_MS);
+    attempts.push(now);
+    signupAttempts.set(ip, attempts);
+    return attempts.length > SIGNUP_MAX_PER_WINDOW;
+}
+
 app.post('/api/auth/signup', async (req, res) => {
     try {
+        const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+        if (isSignupRateLimited(clientIp)) {
+            return res.status(429).json({ error: "Too many accounts created recently. Please try again later." });
+        }
+
         const { username, password } = req.body;
         if (!username || !password || username.trim().length < 2 || password.length < 6) {
             return res.status(400).json({ error: "Username (2+ chars) and password (6+ chars) are required." });
@@ -267,8 +300,25 @@ app.post('/api/auth/signup', async (req, res) => {
     }
 });
 
+const loginAttempts = new Map(); // ip -> [timestamps]
+const LOGIN_MAX_PER_WINDOW = 10;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+function isLoginRateLimited(ip) {
+    const now = Date.now();
+    const attempts = (loginAttempts.get(ip) || []).filter(t => now - t < LOGIN_WINDOW_MS);
+    attempts.push(now);
+    loginAttempts.set(ip, attempts);
+    return attempts.length > LOGIN_MAX_PER_WINDOW;
+}
+
 app.post('/api/auth/login', async (req, res) => {
     try {
+        const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+        if (isLoginRateLimited(clientIp)) {
+            return res.status(429).json({ error: "Too many login attempts. Please wait a few minutes and try again." });
+        }
+
         const { username, password } = req.body;
         if (!username || !password) {
             return res.status(400).json({ error: "Username and password are required." });
@@ -355,7 +405,7 @@ app.post('/api/pantry', requireAuth, async (req, res) => {
 });
 
 // 📸 POST: Analyze image with Gemini (Food/Pantry Scan)
-app.post('/api/pantry/scan', requireAuth, enforceDailyAiLimit, async (req, res) => {
+app.post('/api/pantry/scan', requireAuth, checkDailyLimitOnly, async (req, res) => {
     const { image } = req.body;
     if (!image) {
         return res.status(400).json({ error: "No image payload received." });
@@ -398,17 +448,20 @@ app.post('/api/pantry/scan', requireAuth, enforceDailyAiLimit, async (req, res) 
                 }
             }
         });
+        await recordAiUsage(req.userId, 1);
 
         const scannedItem = JSON.parse(response.text);
         res.json({ success: true, item: scannedItem });
     } catch (error) {
+        await recordAiUsage(req.userId, 1); // the call was still made (and billed) even though it errored
         console.error("AI Scan Error:", error);
         res.status(500).json({ error: "Failed to process image with AI: " + error.message });
     }
 });
 
 // 💬 POST: Chat with Contextual AI Agent (Multi-Tier Fallback Edition)
-app.post('/api/chat', requireAuth, enforceDailyAiLimit, async (req, res) => {
+app.post('/api/chat', requireAuth, checkDailyLimitOnly, async (req, res) => {
+    let modelCallsMade = 0;
     try {
         const { message, history, pantry } = req.body;
 
@@ -507,6 +560,7 @@ STRICT DEDUPLICATION:
         for (const modelName of modelsToTry) {
             try {
                 console.log(`📡 Attempting API call with model: ${modelName}...`);
+                modelCallsMade++;
                 response = await ai.models.generateContent({
                     model: modelName,
                     contents: contents,
@@ -590,9 +644,11 @@ STRICT DEDUPLICATION:
         }
 
         if (!response || !response.text) {
+            await recordAiUsage(req.userId, modelCallsMade);
             throw lastError || new Error("All Gemini models failed to respond.");
         }
 
+        await recordAiUsage(req.userId, modelCallsMade);
         const parsedResult = JSON.parse(response.text);
         
         const uniqueIngredients = Array.from(new Set(
@@ -630,10 +686,10 @@ STRICT DEDUPLICATION:
         );
 
         if (isQuotaError) {
-            return res.status(429).json({ error: { message: 'AI quota exceeded across all fallback models. Please try again in a minute.' } });
+            return res.status(429).json({ error: 'AI quota exceeded across all fallback models. Please try again in a minute.' });
         }
 
-        res.status(503).json({ error: { message: `Service temporarily unavailable. Error: ${error.message}` } });
+        res.status(503).json({ error: `Service temporarily unavailable. Error: ${error.message}` });
     }
 });
 
@@ -896,7 +952,7 @@ app.post('/api/shopping-list/checkout', requireAuth, async (req, res) => {
 });
 
 // 📸 POST: Multi-modal Receipt Scan parsing
-app.post('/api/pantry/scan-receipt', requireAuth, enforceDailyAiLimit, async (req, res) => {
+app.post('/api/pantry/scan-receipt', requireAuth, checkDailyLimitOnly, async (req, res) => {
     try {
         const { imageBase64 } = req.body; 
         if (!imageBase64) return res.status(400).json({ error: "No receipt image data received." });
@@ -929,11 +985,13 @@ app.post('/api/pantry/scan-receipt', requireAuth, enforceDailyAiLimit, async (re
             contents: [prompt, imagePart],
             config: { responseMimeType: "application/json" }
         });
+        await recordAiUsage(req.userId, 1);
 
         const parsedData = JSON.parse(response.text);
         res.json({ items: parsedData.items || [] });
 
     } catch (error) {
+        await recordAiUsage(req.userId, 1);
         console.error("❌ Receipt scan breakdown:", error);
         res.status(500).json({ error: "Failed to accurately parse the receipt snapshot." });
     }
