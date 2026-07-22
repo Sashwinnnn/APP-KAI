@@ -13,6 +13,8 @@
   "theme_color": "#020617",
   "orientation": "portrait",
   "categories": ["food", "lifestyle", "utilities"],
+  "iarc_rating_id": "e0894fe8-31cc-4131-9653-ef0c3459e0a8",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icons/icon-192.png",
