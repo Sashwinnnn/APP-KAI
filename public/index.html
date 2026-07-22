@@ -22,6 +22,19 @@
     <!-- Tailwind CSS via CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
    <style>
+    /* Mobile layout guards — prevent horizontal scroll/overflow on narrow screens */
+    html, body {
+        overflow-x: hidden;
+        width: 100%;
+        max-width: 100vw;
+    }
+
+    /* iOS Safari auto-zooms the page when a focused input's font-size is under 16px.
+       Force 16px on all text-entry fields regardless of their Tailwind text-size class. */
+    input, select, textarea {
+        font-size: 16px !important;
+    }
+
     /* Modern Premium Glass UI */
     .glass-panel {
         background: rgba(255, 255, 255, 0.03);
@@ -110,7 +123,7 @@
 <body class="bg-slate-950 text-slate-100 pb-36 min-h-screen flex flex-col items-center selection:bg-slate-700/50">
 
     <!-- AUTH GATE: shown until a valid session is confirmed -->
-    <div id="auth-gate" class="fixed inset-0 z-50 bg-slate-950 flex flex-col items-center justify-center px-6">
+    <div id="auth-gate" class="fixed inset-0 z-[60] bg-slate-950 flex flex-col items-center justify-center px-6">
         <span class="font-black text-3xl tracking-[0.3em] text-emerald-50 drop-shadow-[0_0_14px_rgba(16,185,129,0.45)] select-none mb-8">
             KAI
         </span>
@@ -399,7 +412,7 @@
     </div>
 
     <!-- STREAMLINED FLOATING DOCK WITH TOP CAPTURE PILL -->
-<div id="navigation-dock" class="fixed bottom-5 left-1/2 -translate-x-1/2 w-[92%] max-w-md z-50">
+<div id="navigation-dock" class="hidden fixed bottom-5 left-1/2 -translate-x-1/2 w-[92%] max-w-md z-50">
     <div class="liquid-glass-dock rounded-[2.5rem] p-3 flex flex-col items-center gap-3 shadow-2xl relative overflow-hidden">
         
         <!-- TOP CAPTURE PILL BUTTON -->
@@ -1471,7 +1484,7 @@
                     }
                 } else {
                     const errData = await response.json();
-                    appendChatMessage('assistant', errData?.error?.message || "KAI is having trouble processing that right now.");
+                    appendChatMessage('assistant', errData?.error || "KAI is having trouble processing that right now.");
                 }
             } catch (err) {
                 document.getElementById(loadingId)?.remove();
@@ -1770,6 +1783,7 @@
 
         /* INITIALIZATION */
         function initApp() {
+            document.getElementById('navigation-dock')?.classList.remove('hidden');
             fetchPantryItems();
             initInstallBanner();
             document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
