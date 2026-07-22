@@ -120,6 +120,47 @@ function requireAuth(req, res, next) {
 
 app.use(attachUser);
 
+/* ===================== DAILY AI USAGE CAP (dynamic, real-time split) =====================
+   Gemini's free tier is a single shared pool across your whole app (not
+   per-user) — roughly 1,500 requests/day. Rather than a fixed per-user
+   number, each person's daily allowance is computed live as:
+       SHARED_DAILY_AI_BUDGET / (current total registered users)
+   So 5 users each get a generous share; 5,000 users each get almost
+   nothing — which is an honest signal that free tier has been outgrown
+   and it's time to move to billed usage, not a UX choice to fudge. */
+const SHARED_DAILY_AI_BUDGET = Number(process.env.SHARED_DAILY_AI_BUDGET) || 1400;
+
+async function enforceDailyAiLimit(req, res, next) {
+    try {
+        const db = await getDbConnection();
+        const today = new Date().toISOString().split('T')[0];
+
+        const userCountRow = await db.get(`SELECT COUNT(*) as count FROM users`);
+        const totalUsers = Math.max(userCountRow?.count || 1, 1);
+        const perUserLimitToday = Math.max(1, Math.floor(SHARED_DAILY_AI_BUDGET / totalUsers));
+
+        await db.run(
+            `INSERT INTO daily_usage (user_id, usage_date, count) VALUES (?, ?, 1)
+             ON CONFLICT(user_id, usage_date) DO UPDATE SET count = count + 1`,
+            [req.userId, today]
+        );
+        const row = await db.get(
+            `SELECT count FROM daily_usage WHERE user_id = ? AND usage_date = ?`,
+            [req.userId, today]
+        );
+
+        if (row && row.count > perUserLimitToday) {
+            return res.status(429).json({
+                error: `You've hit today's AI usage limit (${perUserLimitToday} requests — your even share of today's shared quota across ${totalUsers} user${totalUsers === 1 ? '' : 's'}). This resets tomorrow.`
+            });
+        }
+        next();
+    } catch (err) {
+        console.error("⚠️ Daily usage check failed, allowing request through:", err.message);
+        next(); // fail open — a broken counter shouldn't take down the whole app
+    }
+}
+
 initDatabase().then(async () => {
     console.log("📂 Local SQLite kitchen database ready.");
     const db = await getDbConnection();
@@ -137,6 +178,20 @@ initDatabase().then(async () => {
         `);
     } catch (usersErr) {
         console.warn("⚠️ Could not ensure users table exists:", usersErr.message);
+    }
+
+    // Per-user daily AI usage counter, to cap shared free-tier consumption.
+    try {
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS daily_usage (
+                user_id INTEGER NOT NULL,
+                usage_date TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, usage_date)
+            )
+        `);
+    } catch (usageErr) {
+        console.warn("⚠️ Could not ensure daily_usage table exists:", usageErr.message);
     }
 
     // Lightweight migrations — wrapped individually so one failure doesn't block the rest.
@@ -186,15 +241,22 @@ app.post('/api/auth/signup', async (req, res) => {
         );
         const newUserId = result.lastID;
 
-        // If this is the very first account, claim any pre-existing data (added before
-        // accounts existed) so the original user doesn't lose their pantry/list/history.
+        // Claim any pre-existing data (added before accounts existed) so it isn't
+        // orphaned. Deterministic by username (set PRIMARY_OWNER_USERNAME in your
+        // environment) so it's always the same person's account regardless of
+        // signup order — not just "whoever happened to sign up first."
+        const primaryOwner = process.env.PRIMARY_OWNER_USERNAME;
+        const isDesignatedOwner = primaryOwner && cleanUsername.toLowerCase() === primaryOwner.trim().toLowerCase();
+
         const userCount = await db.get("SELECT COUNT(*) as count FROM users");
-        if (userCount && userCount.count === 1) {
+        const isFirstAccountEver = userCount && userCount.count === 1;
+
+        if (isDesignatedOwner || (!primaryOwner && isFirstAccountEver)) {
             await db.run("UPDATE pantry SET user_id = ? WHERE user_id IS NULL", [newUserId]);
             await db.run("UPDATE shopping_list SET user_id = ? WHERE user_id IS NULL", [newUserId]);
             await db.run("UPDATE history SET user_id = ? WHERE user_id IS NULL", [newUserId]);
             await db.run("UPDATE recipe_logs SET user_id = ? WHERE user_id IS NULL", [newUserId]);
-            console.log(`📦 Claimed pre-existing data for first account: ${cleanUsername}`);
+            console.log(`📦 Claimed pre-existing data for account: ${cleanUsername}`);
         }
 
         setSessionCookie(res, signSession(newUserId));
@@ -293,7 +355,7 @@ app.post('/api/pantry', requireAuth, async (req, res) => {
 });
 
 // 📸 POST: Analyze image with Gemini (Food/Pantry Scan)
-app.post('/api/pantry/scan', requireAuth, async (req, res) => {
+app.post('/api/pantry/scan', requireAuth, enforceDailyAiLimit, async (req, res) => {
     const { image } = req.body;
     if (!image) {
         return res.status(400).json({ error: "No image payload received." });
@@ -346,7 +408,7 @@ app.post('/api/pantry/scan', requireAuth, async (req, res) => {
 });
 
 // 💬 POST: Chat with Contextual AI Agent (Multi-Tier Fallback Edition)
-app.post('/api/chat', requireAuth, async (req, res) => {
+app.post('/api/chat', requireAuth, enforceDailyAiLimit, async (req, res) => {
     try {
         const { message, history, pantry } = req.body;
 
@@ -834,7 +896,7 @@ app.post('/api/shopping-list/checkout', requireAuth, async (req, res) => {
 });
 
 // 📸 POST: Multi-modal Receipt Scan parsing
-app.post('/api/pantry/scan-receipt', requireAuth, async (req, res) => {
+app.post('/api/pantry/scan-receipt', requireAuth, enforceDailyAiLimit, async (req, res) => {
     try {
         const { imageBase64 } = req.body; 
         if (!imageBase64) return res.status(400).json({ error: "No receipt image data received." });
@@ -878,7 +940,7 @@ app.post('/api/pantry/scan-receipt', requireAuth, async (req, res) => {
 });
 
 // POST: Budget trimmer - figures out what fits in budget using real (or estimated) prices
-app.post('/api/shopping-list/trim', requireAuth, async (req, res) => {
+app.post('/api/shopping-list/trim', requireAuth, enforceDailyAiLimit, async (req, res) => {
     try {
         const { budget, items } = req.body;
         const budgetNum = Number(budget);
