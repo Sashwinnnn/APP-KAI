@@ -998,7 +998,7 @@ app.post('/api/pantry/scan-receipt', requireAuth, checkDailyLimitOnly, async (re
 });
 
 // POST: Budget trimmer - figures out what fits in budget using real (or estimated) prices
-app.post('/api/shopping-list/trim', requireAuth, enforceDailyAiLimit, async (req, res) => {
+app.post('/api/shopping-list/trim', requireAuth, checkDailyLimitOnly, async (req, res) => {
     try {
         const { budget, items } = req.body;
         const budgetNum = Number(budget);
