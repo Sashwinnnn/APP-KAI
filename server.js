@@ -1043,6 +1043,7 @@ app.post('/api/shopping-list/trim', requireAuth, checkDailyLimitOnly, async (req
             });
 
             const parsed = JSON.parse(response.text);
+            await recordAiUsage(req.userId, 1);
             (parsed.items || []).forEach(i => {
                 estimates[i.name.trim().toLowerCase()] = { estimatedPrice: i.estimatedPrice, essential: !!i.essential };
             });
@@ -1092,30 +1093,6 @@ app.post('/api/shopping-list/trim', requireAuth, checkDailyLimitOnly, async (req
         res.status(500).json({ error: err.message });
     }
 });
-
-// Dynamic Push Notification Dispatcher
-async function notifyUserAboutExpiringItem(subscription, item, suggestedRecipe) {
-    const now = new Date();
-    const expiryDate = new Date(item.expiration_date);
-    const diffDays = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-    
-    const timeText = diffDays <= 0 ? 'expires today' : `expires in ${diffDays} day${diffDays > 1 ? 's' : ''}`;
-
-    const payload = JSON.stringify({
-        title: `⚠️ Your ${item.name} ${timeText}!`,
-        body: suggestedRecipe 
-            ? `Use it up! How about making ${suggestedRecipe.title}?`
-            : `Tap to view recipes you can make with ${item.name}.`,
-        recipeId: suggestedRecipe ? suggestedRecipe.id : null,
-        ingredientName: item.name
-    });
-
-    try {
-        await webpush.sendNotification(subscription, payload);
-    } catch (err) {
-        console.error('Error delivering push notification:', err);
-    }
-}
 
 // Listener Setup
 app.listen(PORT, () => {
