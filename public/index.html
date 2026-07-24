@@ -409,7 +409,7 @@
         <div class="relative w-full max-w-md mx-auto aspect-square bg-slate-900/50 rounded-3xl overflow-hidden border border-white/10 flex items-center justify-center">
             <video id="video" class="absolute w-full h-full object-cover" autoplay playsinline></video>
             <div class="absolute inset-8 border border-dashed border-white/20 rounded-2xl pointer-events-none flex items-center justify-center">
-                <p id="loading-indicator" class="hidden text-xs bg-slate-950/90 backdrop-blur-md px-5 py-3 rounded-2xl border border-white/20 text-white tracking-wider font-medium animate-pulse shadow-lg">
+                <p id="-indicator" class="hidden text-xs bg-slate-950/90 backdrop-blur-md px-5 py-3 rounded-2xl border border-white/20 text-white tracking-wider font-medium animate-pulse shadow-lg">
                     Analyzing item...
                 </p>
             </div>
@@ -739,67 +739,83 @@
         }
 
         /* SHOPPING LIST */
-        async function loadShoppingList() {
-            const container = document.getElementById('shopping-list-container');
-            const totalHint = document.getElementById('shopping-total-hint');
-            if (!container) return;
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+async function loadShoppingList() {
+    const container = document.getElementById('shopping-list-container');
+    const totalHint = document.getElementById('shopping-total-hint');
+    if (!container) return;
+    
+    try {
+        const res = await fetch('/api/shopping-list');
+        const items = await res.json();
+        
+        if (items.length === 0) {
+            container.innerHTML = `<p class="text-xs text-slate-500 text-center py-6">Shopping list is empty.</p>`;
+            if (totalHint) totalHint.innerText = '';
+            return;
+        }
+
+        container.innerHTML = '';
+        let pricedTotal = 0;
+        let pricedCount = 0;
+
+        items.forEach(item => {
+            if (item.price !== null && item.price !== undefined) {
+                pricedTotal += Number(item.price);
+                pricedCount++;
+            }
+
+            // Ensure string/UUID/MongoDB IDs are passed as quoted strings in inline handlers
+            const safeId = typeof item.id === 'string' ? `'${item.id}'` : item.id;
+
+            const el = document.createElement('div');
+            el.className = `p-3.5 rounded-2xl flex items-center justify-between text-xs ${item.is_checked ? 'bg-white/2 opacity-50' : 'bg-white/5 border border-white/5'}`;
             
-            try {
-                const res = await fetch('/api/shopping-list');
-                const items = await res.json();
-                
-                if (items.length === 0) {
-                    container.innerHTML = `<p class="text-xs text-slate-500 text-center py-6">Shopping list is empty.</p>`;
-                    if (totalHint) totalHint.innerText = '';
-                    return;
-                }
+            el.innerHTML = `
+                <div class="flex items-center gap-3 min-w-0 flex-1">
+                    <input type="checkbox" ${item.is_checked ? 'checked' : ''} onchange="toggleShoppingChecked(${safeId}, this.checked)" class="w-4 h-4 rounded accent-emerald-500 cursor-pointer shrink-0">
+                    <div class="min-w-0">
+                        <p class="font-bold text-white truncate ${item.is_checked ? 'line-through' : ''}">${escapeHtml(item.name)}</p>
+                        <span class="text-[10px] text-slate-400">Qty: ${escapeHtml(item.quantity || '1')}</span>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <div class="flex items-center gap-0.5 bg-black/30 border border-white/10 rounded-lg px-1.5">
+                        <span class="text-[10px] text-slate-500">$</span>
+                        <input type="number" step="0.01" min="0" value="${item.price !== null && item.price !== undefined ? item.price : ''}" placeholder="--"
+                            onchange="updateShoppingItemPrice(${safeId}, this.value)"
+                            class="w-14 bg-transparent text-white text-[11px] py-1.5 outline-none">
+                    </div>
+                    <button onclick="deleteShoppingItem(${safeId})" class="p-1.5 hover:bg-rose-500/20 rounded-lg text-slate-400 hover:text-rose-400 transition">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                </div>
+            `;
+            container.appendChild(el);
+        });
 
-                container.innerHTML = '';
-                let pricedTotal = 0;
-                let pricedCount = 0;
-                items.forEach(item => {
-                    if (item.price !== null && item.price !== undefined) {
-                        pricedTotal += Number(item.price);
-                        pricedCount++;
-                    }
-                    const el = document.createElement('div');
-                    el.className = `p-3.5 rounded-2xl flex items-center justify-between text-xs ${item.is_checked ? 'bg-white/2 opacity-50' : 'bg-white/5 border border-white/5'}`;
-                    el.innerHTML = `
-                        <div class="flex items-center gap-3 min-w-0 flex-1">
-                            <input type="checkbox" ${item.is_checked ? 'checked' : ''} onchange="toggleShoppingChecked(${item.id}, this.checked)" class="w-4 h-4 rounded accent-emerald-500 cursor-pointer shrink-0">
-                            <div class="min-w-0">
-                                <p class="font-bold text-white truncate ${item.is_checked ? 'line-through' : ''}">${item.name}</p>
-                                <span class="text-[10px] text-slate-400">Qty: ${item.quantity || '1'}</span>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-2 shrink-0">
-                            <div class="flex items-center gap-0.5 bg-black/30 border border-white/10 rounded-lg px-1.5">
-                                <span class="text-[10px] text-slate-500">$</span>
-                                <input type="number" step="0.01" min="0" value="${item.price !== null && item.price !== undefined ? item.price : ''}" placeholder="--"
-                                    onchange="updateShoppingItemPrice(${item.id}, this.value)"
-                                    class="w-14 bg-transparent text-white text-[11px] py-1.5 outline-none">
-                            </div>
-                            <button onclick="deleteShoppingItem(${item.id})" class="p-1.5 hover:bg-rose-500/20 rounded-lg text-slate-400 hover:text-rose-400 transition">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                            </button>
-                        </div>
-                    `;
-                    container.appendChild(el);
-                });
-
-                if (totalHint) {
-                    if (pricedCount === items.length) {
-                        totalHint.innerText = `Priced total: $${pricedTotal.toFixed(2)}`;
-                    } else if (pricedCount > 0) {
-                        totalHint.innerText = `Priced total so far: $${pricedTotal.toFixed(2)} (${items.length - pricedCount} item${items.length - pricedCount === 1 ? '' : 's'} unpriced — AI Trim will estimate them)`;
-                    } else {
-                        totalHint.innerText = `No prices entered yet — AI Trim will estimate them for you.`;
-                    }
-                }
-            } catch (e) {
-                console.error("Error loading shopping list:", e);
+        if (totalHint) {
+            if (pricedCount === items.length) {
+                totalHint.innerText = `Priced total: $${pricedTotal.toFixed(2)}`;
+            } else if (pricedCount > 0) {
+                totalHint.innerText = `Priced total so far: $${pricedTotal.toFixed(2)} (${items.length - pricedCount} item${items.length - pricedCount === 1 ? '' : 's'} unpriced — AI Trim will estimate them)`;
+            } else {
+                totalHint.innerText = `No prices entered yet — AI Trim will estimate them for you.`;
             }
         }
+    } catch (e) {
+        console.error("Error loading shopping list:", e);
+    }
+}
 
         async function updateShoppingItemPrice(id, price) {
             await fetch(`/api/shopping-list/${id}`, {
