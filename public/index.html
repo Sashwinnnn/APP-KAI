@@ -1822,6 +1822,35 @@ async function loadSavingsDashboard() {
                 if (e.key === 'Enter') submitAuthForm();
             });
         });
+
+        // 1. Listen for clicks if the app is already open in a tab
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'OPEN_RECIPE_MODAL') {
+            triggerRecipeModal(event.data.recipeId);
+        }
+    });
+}
+
+// 2. Open the recipe modal if the app was opened fresh from a background notification
+window.addEventListener('DOMContentLoaded', () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const recipeId = urlParams.get('openRecipe');
+    if (recipeId) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        triggerRecipeModal(recipeId);
+    }
+});
+
+// 3. Connect to your existing recipe modal function
+function triggerRecipeModal(recipeId) {
+    if (!recipeId) return;
+    
+    // REPLACE 'openRecipeModal' with whatever function name you use to show recipes in your app
+    if (typeof openRecipeModal === 'function') {
+        openRecipeModal(recipeId);
+    }
+}
     </script>
 </body>
 </html>
