@@ -52,3 +52,59 @@ self.addEventListener('fetch', (event) => {
             .catch(() => caches.match(event.request))
     );
 });
+
+// ==========================================
+// PUSH NOTIFICATIONS & DEEP LINKING
+// ==========================================
+
+self.addEventListener('push', (event) => {
+    let data = {};
+    try {
+        data = event.data ? event.data.json() : {};
+    } catch(e) {
+        data = { title: 'Expiring Ingredient Alert!', body: event.data.text() };
+    }
+    
+    const title = data.title || 'Ingredient Expiring Soon!';
+    const recipeId = data.recipeId || '';
+    
+    const options = {
+        body: data.body || 'Tap to cook a recipe before it spoils!',
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+        vibrate: [100, 50, 100],
+        data: {
+            recipeId: recipeId,
+            url: `/?openRecipe=${recipeId}`
+        }
+    };
+
+    event.waitUntil(
+        self.registration.showNotification(title, options)
+    );
+});
+
+self.addEventListener('notificationclick', (event) => {
+    event.notification.close();
+
+    const targetUrl = event.notification.data.url;
+    const recipeId = event.notification.data.recipeId;
+
+    event.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+            for (const client of clientList) {
+                if ('focus' in client) {
+                    client.focus();
+                    client.postMessage({
+                        type: 'OPEN_RECIPE_MODAL',
+                        recipeId: recipeId
+                    });
+                    return;
+                }
+            }
+            if (clients.openWindow) {
+                return clients.openWindow(targetUrl);
+            }
+        })
+    );
+});
