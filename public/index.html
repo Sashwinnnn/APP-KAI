@@ -912,7 +912,7 @@
             if (!container) return;
 
             try {
-                const res = await fetch('/api/shopping-list');
+                const res = await authFetch('/api/shopping-list');
                 const items = await res.json();
 
                 if (!Array.isArray(items)) {
@@ -981,7 +981,7 @@
         } 
 
         async function updateShoppingItemPrice(id, price) {
-            await fetch(`/api/shopping-list/${id}`, {
+            await authFetch(`/api/shopping-list/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ price: price === '' ? null : Number(price) })
@@ -998,7 +998,7 @@
             const price = priceInput ? priceInput.value.trim() : '';
 
             try {
-                const res = await fetch('/api/shopping-list', {
+                const res = await authFetch('/api/shopping-list', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name, category: 'Custom Items', price: price === '' ? null : Number(price) })
@@ -1019,7 +1019,7 @@
         }
 
         async function toggleShoppingChecked(id, is_checked) {
-            await fetch(`/api/shopping-list/${id}`, {
+            await authFetch(`/api/shopping-list/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ is_checked })
@@ -1028,13 +1028,13 @@
         }
 
         async function deleteShoppingItem(id) {
-            await fetch(`/api/shopping-list/${id}`, { method: 'DELETE' });
+            await authFetch(`/api/shopping-list/${id}`, { method: 'DELETE' });
             loadShoppingList();
         }
 
         async function checkoutShoppingList() {
             try {
-                const res = await fetch('/api/shopping-list/checkout', { method: 'POST' });
+                const res = await authFetch('/api/shopping-list/checkout', { method: 'POST' });
                 const data = await res.json();
                 await loadShoppingList();
                 await fetchPantryItems();
@@ -1064,13 +1064,13 @@
                 return;
             }
 
-            const res = await fetch('/api/shopping-list');
+            const res = await authFetch('/api/shopping-list');
             const items = await res.json();
             if (items.length === 0) return;
 
             let trimRes, advice;
             try {
-                trimRes = await fetch('/api/shopping-list/trim', {
+                trimRes = await authFetch('/api/shopping-list/trim', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ budget, items })
@@ -1120,7 +1120,7 @@
         /* PANTRY INVENTORY & CAMERA MANAGEMENT */
         async function fetchPantryItems() {
             try {
-                const response = await fetch('/api/pantry');
+                const response = await authFetch('/api/pantry');
                 const items = await response.json();
                 currentPantryItems = items;
 
@@ -1193,7 +1193,7 @@
 
         function removeItem(id) {
             showCustomConfirm("Remove item from pantry inventory?", async () => {
-                await fetch(`/api/pantry/${id}`, { method: 'DELETE' });
+                await authFetch(`/api/pantry/${id}`, { method: 'DELETE' });
                 fetchPantryItems();
             }, "Remove Item");
         }
@@ -1253,7 +1253,7 @@
                 };
 
                 try {
-                    const response = await fetch('/api/pantry', {
+                    const response = await authFetch('/api/pantry', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -1319,7 +1319,7 @@
             if (!historyLog) return;
 
             try {
-                const res = await fetch('/api/history');
+                const res = await authFetch('/api/history');
                 let recipes = await res.json();
                 historyLog.innerHTML = '';
 
@@ -1534,7 +1534,7 @@
                     recipe_steps: activeDeckRecipe.steps.join(' | ')
                 };
 
-                await fetch('/api/history', {
+                await authFetch('/api/history', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(record)
@@ -1559,7 +1559,7 @@
             if (!usedIngredients || usedIngredients.length === 0) return;
 
             try {
-                const res = await fetch('/api/pantry/deduct', {
+                const res = await authFetch('/api/pantry/deduct', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ ingredients: usedIngredients })
@@ -1846,12 +1846,7 @@
                 await authFetch(`/api/macros/${id}`, { method: 'DELETE' });
                 loadSavingsDashboard();
             }, "Remove Entry");
-        }tems Rescued</span>
-                <p class="text-lg font-bold text-white">${cookedCount * 2} Items</p>
-            </div>
-        </div>
-    `;
-}
+        }
 
         /* NOTIFICATIONS & CHAT */
         function toggleNotificationTray() {
@@ -1894,7 +1889,7 @@
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
             try {
-                const response = await fetch('/api/chat', {
+                const response = await authFetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2044,7 +2039,7 @@
     if (missingBtn) {
         missingBtn.onclick = async () => {
             try {
-                const res = await fetch('/api/shopping-list/batch', {
+                const res = await authFetch('/api/shopping-list/batch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ items: missing })
@@ -2070,7 +2065,7 @@
             const listToAdd = combinedIngredients.length > 0 ? combinedIngredients : ingredients;
             if (!listToAdd || listToAdd.length === 0) return;
             try {
-                const res = await fetch('/api/shopping-list/batch', {
+                const res = await authFetch('/api/shopping-list/batch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ items: listToAdd })
