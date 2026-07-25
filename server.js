@@ -210,11 +210,15 @@ initDatabase().then(async () => {
     // Lightweight migrations — wrapped individually so one failure doesn't block the rest.
     // SQLite throws "duplicate column" if a column already exists, which we treat as a no-op.
     const migrations = [
-        `ALTER TABLE shopping_list ADD COLUMN price REAL`,
+        `ALTER TABLE pantry ADD COLUMN storage TEXT DEFAULT 'Pantry'`,
         `ALTER TABLE pantry ADD COLUMN user_id INTEGER`,
-        `ALTER TABLE shopping_list ADD COLUMN user_id INTEGER`,
         `ALTER TABLE history ADD COLUMN user_id INTEGER`,
-        `ALTER TABLE recipe_logs ADD COLUMN user_id INTEGER`
+        `ALTER TABLE recipe_logs ADD COLUMN user_id INTEGER`,
+        `ALTER TABLE shopping_list ADD COLUMN is_checked INTEGER DEFAULT 0`,
+        `ALTER TABLE shopping_list ADD COLUMN category TEXT DEFAULT 'Custom Items'`,
+        `ALTER TABLE shopping_list ADD COLUMN is_essential INTEGER DEFAULT 0`,
+        `ALTER TABLE shopping_list ADD COLUMN price REAL`,
+        `ALTER TABLE shopping_list ADD COLUMN user_id INTEGER`
     ];
     for (const sql of migrations) {
         try {
@@ -260,6 +264,9 @@ app.post('/api/auth/signup', async (req, res) => {
         }
         const cleanUsername = username.trim();
 
+        // Ensure database tables exist before querying
+        await initDatabase();
+
         const db = await getDbConnection();
         const existing = await db.get("SELECT id FROM users WHERE username = ? COLLATE NOCASE", [cleanUsername]);
         if (existing) {
@@ -274,21 +281,26 @@ app.post('/api/auth/signup', async (req, res) => {
         );
         const newUserId = result.lastID;
 
-        // Claim any pre-existing data (added before accounts existed) so it isn't
-        // orphaned. Deterministic by username (set PRIMARY_OWNER_USERNAME in your
-        // environment) so it's always the same person's account regardless of
-        // signup order — not just "whoever happened to sign up first."
+        // Claim any pre-existing data (added before accounts existed)
         const primaryOwner = process.env.PRIMARY_OWNER_USERNAME;
         const isDesignatedOwner = primaryOwner && cleanUsername.toLowerCase() === primaryOwner.trim().toLowerCase();
 
-        const userCount = await db.get("SELECT COUNT(*) as count FROM users");
+        let userCount = { count: 1 };
+        try {
+            userCount = await db.get("SELECT COUNT(*) as count FROM users") || { count: 1 };
+        } catch (e) {}
+
         const isFirstAccountEver = userCount && userCount.count === 1;
 
         if (isDesignatedOwner || (!primaryOwner && isFirstAccountEver)) {
-            await db.run("UPDATE pantry SET user_id = ? WHERE user_id IS NULL", [newUserId]);
-            await db.run("UPDATE shopping_list SET user_id = ? WHERE user_id IS NULL", [newUserId]);
-            await db.run("UPDATE history SET user_id = ? WHERE user_id IS NULL", [newUserId]);
-            await db.run("UPDATE recipe_logs SET user_id = ? WHERE user_id IS NULL", [newUserId]);
+            const tables = ['pantry', 'shopping_list', 'history', 'recipe_logs'];
+            for (const tbl of tables) {
+                try {
+                    await db.run(`UPDATE ${tbl} SET user_id = ? WHERE user_id IS NULL`, [newUserId]);
+                } catch (e) {
+                    console.warn(`Notice claiming ${tbl}:`, e.message);
+                }
+            }
             console.log(`📦 Claimed pre-existing data for account: ${cleanUsername}`);
         }
 
@@ -296,7 +308,7 @@ app.post('/api/auth/signup', async (req, res) => {
         res.status(201).json({ id: newUserId, username: cleanUsername });
     } catch (err) {
         console.error("❌ Error signing up:", err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: "Signup error: " + err.message });
     }
 });
 
@@ -693,6 +705,226 @@ STRICT DEDUPLICATION:
     }
 });
 
+// Helper functions for quantity parsing and deduction
+function parseQuantityAndUnit(str) {
+    if (!str || typeof str !== 'string') return { amount: 1, unit: 'count', baseAmount: 1, category: 'count', raw: str };
+
+    let target = str.trim();
+    const parenMatch = target.match(/\(([^)]+)\)/);
+    if (parenMatch && parenMatch[1]) {
+        const inner = parseQuantityAndUnit(parenMatch[1]);
+        if (inner && inner.unit !== 'count' && inner.category !== 'count') {
+            return inner;
+        }
+    }
+
+    let cleanStr = target.toLowerCase()
+        .replace(/(\d+)\s+(\d+)\/(\d+)/g, (m, g1, g2, g3) => (Number(g1) + Number(g2)/Number(g3)).toString())
+        .replace(/(\d+)\/(\d+)/g, (m, g1, g2) => (Number(g1)/Number(g2)).toString());
+
+    const numMatch = cleanStr.match(/([0-9.]+)\s*([a-zA-Z\s]+)?/);
+    if (!numMatch) return { amount: 1, unit: 'count', baseAmount: 1, category: 'count', raw: str };
+
+    const amount = parseFloat(numMatch[1]) || 1;
+    let unitRaw = (numMatch[2] || '').trim();
+    const unitToken = unitRaw.split(/\s+/)[0] || '';
+    const u = unitToken.toLowerCase();
+
+    // Volume (Base unit: tsp)
+    if (/^(tsp|teaspoon|teaspoons|t)$/.test(u)) return { amount, unit: 'tsp', baseAmount: amount, category: 'volume' };
+    if (/^(tbsp|tablespoon|tablespoons|tbs|tb)$/.test(u)) return { amount, unit: 'tbsp', baseAmount: amount * 3, category: 'volume' };
+    if (/^(fl\s*oz|floz|fluid\s*oz)$/.test(u)) return { amount, unit: 'fl oz', baseAmount: amount * 6, category: 'volume' };
+    if (/^(cup|cups|c)$/.test(u)) return { amount, unit: 'cup', baseAmount: amount * 48, category: 'volume' };
+    if (/^(pt|pint|pints)$/.test(u)) return { amount, unit: 'pint', baseAmount: amount * 96, category: 'volume' };
+    if (/^(qt|quart|quarts)$/.test(u)) return { amount, unit: 'quart', baseAmount: amount * 192, category: 'volume' };
+    if (/^(gal|gallon|gallons)$/.test(u)) return { amount, unit: 'gallon', baseAmount: amount * 768, category: 'volume' };
+    if (/^(ml|milliliter|milliliters)$/.test(u)) return { amount, unit: 'ml', baseAmount: amount * 0.202884, category: 'volume' };
+    if (/^(l|liter|liters)$/.test(u)) return { amount, unit: 'l', baseAmount: amount * 202.884, category: 'volume' };
+
+    // Weight (Base unit: g)
+    if (/^(g|gram|grams)$/.test(u)) return { amount, unit: 'g', baseAmount: amount, category: 'weight' };
+    if (/^(kg|kilogram|kilograms)$/.test(u)) return { amount, unit: 'kg', baseAmount: amount * 1000, category: 'weight' };
+    if (/^(oz|ounce|ounces)$/.test(u)) return { amount, unit: 'oz', baseAmount: amount * 28.3495, category: 'weight' };
+    if (/^(lb|lbs|pound|pounds)$/.test(u)) return { amount, unit: 'lb', baseAmount: amount * 453.592, category: 'weight' };
+
+    // Common containers (map to base volume/weight so deducting tsp/tbsp/cups/grams works accurately without throwing out the jar)
+    if (/^(jar|jars)$/.test(u)) return { amount, unit: 'jar', baseAmount: amount * 96, category: 'volume' }; // 1 jar = 96 tsp (~2 cups / 16 oz)
+    if (/^(bottle|bottles)$/.test(u)) return { amount, unit: 'bottle', baseAmount: amount * 96, category: 'volume' };
+    if (/^(can|cans)$/.test(u)) return { amount, unit: 'can', baseAmount: amount * 96, category: 'volume' };
+    if (/^(tub|tubs)$/.test(u)) return { amount, unit: 'tub', baseAmount: amount * 96, category: 'volume' };
+    if (/^(carton|cartons)$/.test(u)) return { amount, unit: 'carton', baseAmount: amount * 192, category: 'volume' }; // 1 carton = 192 tsp (4 cups / 32 fl oz)
+    if (/^(container|containers)$/.test(u)) return { amount, unit: 'container', baseAmount: amount * 96, category: 'volume' };
+    if (/^(box|boxes)$/.test(u)) return { amount, unit: 'box', baseAmount: amount * 450, category: 'weight' };
+    if (/^(bag|bags|pack|packs|packet|packets|package|packages)$/.test(u)) return { amount, unit: 'pack', baseAmount: amount * 450, category: 'weight' };
+    if (/^(stick|sticks)$/.test(u)) return { amount, unit: 'stick', baseAmount: amount * 24, category: 'volume' }; // 1 stick butter = 24 tsp
+
+    return { amount, unit: u || 'count', baseAmount: amount, category: 'count' };
+}
+
+function formatRemainingQuantity(baseAmount, category, originalUnit) {
+    if (baseAmount <= 0.05) return null;
+
+    if (category === 'volume') {
+        if (originalUnit === 'jar' || originalUnit === 'bottle' || originalUnit === 'can' || originalUnit === 'tub' || originalUnit === 'carton' || originalUnit === 'container') {
+            const initialBase = (originalUnit === 'carton' ? 192 : 96);
+            const ratio = baseAmount / initialBase;
+            if (ratio >= 0.85) {
+                const cups = (baseAmount / 48).toFixed(1).replace(/\.0$/, '');
+                return `${cups} cups (~${ratio.toFixed(1)} ${originalUnit})`;
+            }
+        }
+
+        if (baseAmount >= 48) {
+            const cups = (baseAmount / 48).toFixed(1).replace(/\.0$/, '');
+            return `${cups} cup${cups === '1' ? '' : 's'}`;
+        }
+        if (baseAmount >= 3) {
+            const tbsp = (baseAmount / 3).toFixed(1).replace(/\.0$/, '');
+            return `${tbsp} tbsp`;
+        }
+        const tsp = baseAmount.toFixed(1).replace(/\.0$/, '');
+        return `${tsp} tsp`;
+    }
+
+    if (category === 'weight') {
+        if (originalUnit === 'oz' || originalUnit === 'lb') {
+            const oz = (baseAmount / 28.3495).toFixed(1).replace(/\.0$/, '');
+            return `${oz} oz`;
+        }
+        if (baseAmount >= 1000) {
+            const kg = (baseAmount / 1000).toFixed(1).replace(/\.0$/, '');
+            return `${kg} kg`;
+        }
+        const g = Math.round(baseAmount);
+        return `${g}g`;
+    }
+
+    const rounded = (Math.round(baseAmount * 10) / 10).toString();
+    if (originalUnit && originalUnit !== 'count') {
+        return `${rounded} ${originalUnit}`;
+    }
+    return `${rounded} count`;
+}
+
+// PUT: Update single pantry item
+app.put('/api/pantry/:id', requireAuth, async (req, res) => {
+    const { id } = req.params;
+    const { name, quantity, expiry_date, storage } = req.body;
+    try {
+        const db = await getDbConnection();
+        const updateFields = [];
+        const values = [];
+
+        if (name !== undefined) { updateFields.push("name = ?"); values.push(name); }
+        if (quantity !== undefined) { updateFields.push("quantity = ?"); values.push(quantity); }
+        if (expiry_date !== undefined) { updateFields.push("expiry_date = ?"); values.push(expiry_date); }
+        if (storage !== undefined) { updateFields.push("storage = ?"); values.push(storage); }
+
+        if (updateFields.length === 0) {
+            return res.status(400).json({ error: "No fields to update." });
+        }
+
+        values.push(id, req.userId);
+        await db.run(`UPDATE pantry SET ${updateFields.join(', ')} WHERE id = ? AND user_id = ?`, values);
+        res.json({ success: true, message: "Pantry item updated." });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// POST: Intelligent partial quantity deduction for recipe ingredients
+app.post('/api/pantry/deduct', requireAuth, async (req, res) => {
+    const { ingredients } = req.body;
+    if (!ingredients || !Array.isArray(ingredients) || ingredients.length === 0) {
+        return res.json({ success: true, deductions: [] });
+    }
+
+    try {
+        const db = await getDbConnection();
+        const pantryItems = await db.all("SELECT * FROM pantry WHERE user_id = ? ORDER BY expiry_date ASC", [req.userId]);
+
+        const deductions = [];
+
+        for (let rawIng of ingredients) {
+            let ingString = "";
+            if (typeof rawIng === 'string') {
+                ingString = rawIng;
+            } else if (rawIng && typeof rawIng === 'object') {
+                ingString = `${rawIng.quantity || rawIng.amount || ''} ${rawIng.name || rawIng.ingredient || ''}`.trim();
+            }
+            if (!ingString) continue;
+
+            const ingParsed = parseQuantityAndUnit(ingString);
+            
+            // Clean name for matching
+            const ingNameClean = ingString.toLowerCase()
+                .replace(/^[\d\/\.\s]+/, '')
+                .replace(/^(tsp|tbsp|cup|cups|oz|g|kg|lb|lbs|fl oz|teaspoon|teaspoons|tablespoon|tablespoons|carton|jar|bottle|slice|slices|piece|pieces|boneless|skinless|fresh|organic|raw|frozen|clove|cloves|of|a|an|some)\s+/gi, '')
+                .trim();
+
+            if (!ingNameClean) continue;
+
+            // Match item in pantry
+            const matchedItem = pantryItems.find(p => {
+                const pName = p.name.toLowerCase();
+                const pClean = pName.replace(/organic|fresh|raw|frozen|boneless|skinless/gi, '').trim();
+                const ingClean = ingNameClean.replace(/organic|fresh|raw|frozen|boneless|skinless/gi, '').trim();
+
+                return pName.includes(ingNameClean) || ingNameClean.includes(pName) ||
+                       (pClean && ingClean && (pClean.includes(ingClean) || ingClean.includes(pClean)));
+            });
+
+            if (matchedItem) {
+                let pantryParsed = parseQuantityAndUnit(matchedItem.quantity);
+
+                let pCategory = pantryParsed.category;
+                let pBaseAmount = pantryParsed.baseAmount;
+                let pUnit = pantryParsed.unit;
+
+                // If pantry item category is 'count' or unit mismatch, convert safely so deduction works accurately
+                if (pCategory !== ingParsed.category) {
+                    if (ingParsed.category === 'volume') {
+                        pCategory = 'volume';
+                        pBaseAmount = (pUnit === 'carton' ? 192 : 96) * (pantryParsed.amount || 1);
+                    } else if (ingParsed.category === 'weight') {
+                        pCategory = 'weight';
+                        pBaseAmount = 450 * (pantryParsed.amount || 1);
+                    }
+                }
+
+                const remainingBase = pBaseAmount - ingParsed.baseAmount;
+                const newQuantityStr = formatRemainingQuantity(remainingBase, pCategory, pUnit);
+
+                if (!newQuantityStr || remainingBase <= 0) {
+                    await db.run("DELETE FROM pantry WHERE id = ? AND user_id = ?", [matchedItem.id, req.userId]);
+                    deductions.push({
+                        name: matchedItem.name,
+                        deducted: ingString,
+                        previous: matchedItem.quantity,
+                        remaining: 'Finished',
+                        action: 'deleted'
+                    });
+                } else {
+                    await db.run("UPDATE pantry SET quantity = ? WHERE id = ? AND user_id = ?", [newQuantityStr, matchedItem.id, req.userId]);
+                    matchedItem.quantity = newQuantityStr;
+                    deductions.push({
+                        name: matchedItem.name,
+                        deducted: ingString,
+                        previous: matchedItem.quantity,
+                        remaining: newQuantityStr,
+                        action: 'updated'
+                    });
+                }
+            }
+        }
+
+        res.json({ success: true, deductions });
+    } catch (err) {
+        console.error("❌ Error deducting pantry items:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // DELETE: Remove single item
 app.delete('/api/pantry/:id', requireAuth, async (req, res) => {
     const { id } = req.params;
@@ -812,15 +1044,40 @@ app.post('/api/shopping-list/batch', requireAuth, async (req, res) => {
         }
 
         const db = await getDbConnection();
+        let addedCount = 0;
         
-        for (const item of items) {
+        for (const rawItem of items) {
+            let name = "";
+            let quantity = "1";
+
+            if (typeof rawItem === 'string') {
+                const parsed = parseQuantityAndUnit(rawItem);
+                name = rawItem
+                    .replace(/^[\d\/\.\s]+/, '')
+                    .replace(/^(tsp|tbsp|cup|cups|oz|g|kg|lb|lbs|fl oz|teaspoon|teaspoons|tablespoon|tablespoons|carton|jar|bottle|slice|slices|piece|pieces|boneless|skinless|fresh|organic|raw|frozen|clove|cloves|of|a|an|some)\s+/gi, '')
+                    .trim();
+                if (!name) name = rawItem.trim();
+
+                if (parsed.amount && parsed.unit && parsed.unit !== 'count') {
+                    quantity = `${parsed.amount} ${parsed.unit}`;
+                } else if (parsed.amount && parsed.amount !== 1) {
+                    quantity = `${parsed.amount}`;
+                }
+            } else if (rawItem && typeof rawItem === 'object') {
+                name = rawItem.name || rawItem.ingredient || String(rawItem);
+                quantity = rawItem.quantity || rawItem.amount || '1';
+            }
+
+            if (!name) continue;
+
             await db.run(
                 `INSERT INTO shopping_list (name, quantity, category, is_essential, user_id) VALUES (?, ?, ?, ?, ?)`,
-                [item, '1', 'Recipe Essentials', 1, req.userId]
+                [name, quantity, 'Recipe Essentials', 1, req.userId]
             );
+            addedCount++;
         }
         
-        res.json({ success: true, message: `Added ${items.length} items to your shopping list.` });
+        res.json({ success: true, message: `Added ${addedCount} items to your shopping list.` });
     } catch (err) {
         console.error("❌ Error batch-adding items:", err);
         res.status(500).json({ error: err.message });
