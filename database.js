@@ -10,12 +10,26 @@ export async function getDbConnection() {
 
 export async function initDatabase() {
     const db = await getDbConnection();
-    
-    try {
-        await db.exec(`PRAGMA busy_timeout = 5000;`);
-    } catch (e) {}
 
-    // 1. Create Pantry table
+    // 0. Users table — required for multi-user accounts. Missing this table
+    //    (or any of the ones below) is what made signup crash with
+    //    "no such table: ..." errors.
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            created_at TEXT,
+            target_calories INTEGER DEFAULT 2000,
+            target_protein_g REAL DEFAULT 150,
+            target_carbs_g REAL DEFAULT 200,
+            target_fat_g REAL DEFAULT 65
+        )
+    `);
+
+    // 1. Create Pantry table (storage + user_id included so fresh installs
+    //    don't need the ALTER TABLE migrations at all)
     await db.exec(`
         CREATE TABLE IF NOT EXISTS pantry (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,56 +53,55 @@ export async function initDatabase() {
         )
     `);
 
-    // 3. Create Recipe Logs Table
+    // 3. Recipe step logs — used by "Cook Again" / the flashcard cooking
+    //    modal. This table was never created anywhere, which crashed both
+    //    /api/history (finishing a recipe) and signup (which tries to claim
+    //    pre-existing rows in every table, including this one).
     await db.exec(`
         CREATE TABLE IF NOT EXISTS recipe_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             recipe_name TEXT NOT NULL,
             recipe_steps TEXT,
             ingredients_used TEXT,
-            time_taken_minutes INTEGER DEFAULT 0,
-            user_id INTEGER,
-            created_at DATE DEFAULT CURRENT_DATE
+            time_taken_minutes INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER
         )
     `);
 
-    // 4. Create Shopping List Table
+    // 3b. Daily macro/nutrition log — the entire Macros tab (log food, AI
+    //     estimate, goals) reads/writes this table, but it was never created.
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS daily_macros (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            log_date DATE DEFAULT CURRENT_DATE,
+            food_name TEXT NOT NULL,
+            calories INTEGER DEFAULT 0,
+            protein_g REAL DEFAULT 0,
+            carbs_g REAL DEFAULT 0,
+            fat_g REAL DEFAULT 0
+        )
+    `);
+
+    // 🛒 4. Shopping List Table — category/is_essential/is_checked/price were
+    //    referenced throughout server.js but never actually existed as
+    //    columns, so every insert/update against them failed silently.
     await db.exec(`
         CREATE TABLE IF NOT EXISTS shopping_list (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             quantity TEXT DEFAULT '1',
-            is_checked INTEGER DEFAULT 0,
             category TEXT DEFAULT 'Custom Items',
             is_essential INTEGER DEFAULT 0,
+            is_checked INTEGER DEFAULT 0,
             price REAL,
-            user_id INTEGER,
-            added_date DATE DEFAULT CURRENT_DATE
+            added_date DATE DEFAULT CURRENT_DATE,
+            user_id INTEGER
         )
     `);
 
-    // 5. Create Users Table
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            password_salt TEXT NOT NULL,
-            created_at TEXT,
-            target_calories INTEGER DEFAULT 2000,
-            target_protein_g INTEGER DEFAULT 150,
-            target_carbs_g INTEGER DEFAULT 200,
-            target_fat_g INTEGER DEFAULT 65
-        )
-    `);
-
-    // Safely add target columns if table existed without them
-    try { await db.exec(`ALTER TABLE users ADD COLUMN target_calories INTEGER DEFAULT 2000`); } catch (e) {}
-    try { await db.exec(`ALTER TABLE users ADD COLUMN target_protein_g INTEGER DEFAULT 150`); } catch (e) {}
-    try { await db.exec(`ALTER TABLE users ADD COLUMN target_carbs_g INTEGER DEFAULT 200`); } catch (e) {}
-    try { await db.exec(`ALTER TABLE users ADD COLUMN target_fat_g INTEGER DEFAULT 65`); } catch (e) {}
-
-    // 6. Create Daily Usage Table
+    // 5. Per-user daily AI usage counter (shared free-tier budget split).
     await db.exec(`
         CREATE TABLE IF NOT EXISTS daily_usage (
             user_id INTEGER NOT NULL,
@@ -98,51 +111,32 @@ export async function initDatabase() {
         )
     `);
 
-    // 7. Create Daily Macros Table
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS daily_macros (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            log_date DATE NOT NULL,
-            food_name TEXT NOT NULL,
-            calories INTEGER DEFAULT 0,
-            protein_g REAL DEFAULT 0,
-            carbs_g REAL DEFAULT 0,
-            fat_g REAL DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-
     // Seed demo values if database is fresh
-    try {
-        const countResult = await db.get("SELECT COUNT(*) as count FROM pantry");
-        if (countResult && countResult.count === 0) {
-            const today = new Date();
-            
-            const expiredDate = new Date();
-            expiredDate.setDate(today.getDate() - 2);
+    const countResult = await db.get("SELECT COUNT(*) as count FROM pantry");
+    if (countResult.count === 0) {
+        const today = new Date();
 
-            const soonDate = new Date();
-            soonDate.setDate(today.getDate() + 2);
+        const expiredDate = new Date();
+        expiredDate.setDate(today.getDate() - 2);
 
-            const freshDate = new Date();
-            freshDate.setDate(today.getDate() + 12);
+        const soonDate = new Date();
+        soonDate.setDate(today.getDate() + 2);
 
-            await db.run(
-                "INSERT INTO pantry (name, quantity, expiry_date) VALUES (?, ?, ?)",
-                ['Organic Whole Milk', '1 carton', expiredDate.toISOString().split('T')[0]]
-            );
-            await db.run(
-                "INSERT INTO pantry (name, quantity, expiry_date) VALUES (?, ?, ?)",
-                ['Fresh Avocado', '2 count', soonDate.toISOString().split('T')[0]]
-            );
-            await db.run(
-                "INSERT INTO pantry (name, quantity, expiry_date) VALUES (?, ?, ?)",
-                ['Boneless Chicken Breast', '500g', freshDate.toISOString().split('T')[0]]
-            );
-            console.log("🌱 Database seeded with mock pantry items.");
-        }
-    } catch (seedErr) {
-        console.warn("Notice seeding database:", seedErr.message);
+        const freshDate = new Date();
+        freshDate.setDate(today.getDate() + 12);
+
+        await db.run(
+            "INSERT INTO pantry (name, quantity, expiry_date) VALUES (?, ?, ?)",
+            ['Organic Whole Milk', '1 carton', expiredDate.toISOString().split('T')[0]]
+        );
+        await db.run(
+            "INSERT INTO pantry (name, quantity, expiry_date) VALUES (?, ?, ?)",
+            ['Fresh Avocado', '2 count', soonDate.toISOString().split('T')[0]]
+        );
+        await db.run(
+            "INSERT INTO pantry (name, quantity, expiry_date) VALUES (?, ?, ?)",
+            ['Boneless Chicken Breast', '500g', freshDate.toISOString().split('T')[0]]
+        );
+        console.log("🌱 Database seeded with mock pantry items.");
     }
 }
