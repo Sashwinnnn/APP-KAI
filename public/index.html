@@ -139,25 +139,25 @@
             KAI
         </span>
 
-        <div class="w-full max-w-sm glass-panel rounded-3xl p-6 space-y-4">
+        <form id="auth-form" onsubmit="submitAuthForm(event)" class="w-full max-w-sm glass-panel rounded-3xl p-6 space-y-4">
             <div class="flex bg-white/[0.04] border border-white/10 rounded-xl p-1 gap-1">
-                <button id="auth-tab-login" onclick="switchAuthTab('login')" class="flex-1 py-2 rounded-lg text-xs font-bold transition bg-white/10 text-white">Log In</button>
-                <button id="auth-tab-signup" onclick="switchAuthTab('signup')" class="flex-1 py-2 rounded-lg text-xs font-bold transition text-slate-400">Sign Up</button>
+                <button type="button" id="auth-tab-login" onclick="switchAuthTab('login')" class="flex-1 py-2 rounded-lg text-xs font-bold transition bg-white/10 text-white">Log In</button>
+                <button type="button" id="auth-tab-signup" onclick="switchAuthTab('signup')" class="flex-1 py-2 rounded-lg text-xs font-bold transition text-slate-400">Sign Up</button>
             </div>
 
             <p class="text-xs text-slate-400 text-center leading-relaxed">Your own pantry, shopping list, and history — separate from anyone else using this app.</p>
 
             <div class="space-y-2.5">
-                <input type="text" id="auth-username" placeholder="Username" autocomplete="username" class="w-full bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 transition">
-                <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password" class="w-full bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 transition">
+                <input type="text" id="auth-username" required placeholder="Username" autocomplete="username" class="w-full bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 transition">
+                <input type="password" id="auth-password" required placeholder="Password" autocomplete="current-password" class="w-full bg-white/[0.04] border border-white/10 focus:border-white/30 outline-none rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 transition">
             </div>
 
-            <p id="auth-error" class="hidden text-xs text-rose-400 text-center"></p>
+            <div id="auth-error" class="hidden text-xs text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-xl p-3 text-center"></div>
 
-            <button id="auth-submit-btn" onclick="submitAuthForm()" class="w-full liquid-glass-button text-white font-bold text-sm py-3 rounded-xl transition active:scale-95">
+            <button type="submit" id="auth-submit-btn" class="w-full liquid-glass-button text-white font-bold text-sm py-3 rounded-xl transition active:scale-95">
                 Log In
             </button>
-        </div>
+        </form>
     </div>
 
     <!-- MAIN APP CONTAINER -->
@@ -2192,22 +2192,24 @@
             }
         }
 
-        async function submitAuthForm() {
+        async function submitAuthForm(e) {
+            if (e) e.preventDefault();
             const username = document.getElementById('auth-username').value.trim();
             const password = document.getElementById('auth-password').value;
             const errorEl = document.getElementById('auth-error');
             const submitBtn = document.getElementById('auth-submit-btn');
             errorEl.classList.add('hidden');
+            errorEl.innerHTML = '';
 
             if (!username || !password) {
-                errorEl.innerText = "Enter a username and password.";
+                errorEl.innerHTML = "<span>Please enter both a username and password.</span>";
                 errorEl.classList.remove('hidden');
                 return;
             }
 
             submitBtn.disabled = true;
             const originalLabel = submitBtn.innerText;
-            submitBtn.innerText = "Please wait...";
+            submitBtn.innerText = "Processing...";
 
             try {
                 const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/signup';
@@ -2219,17 +2221,29 @@
                 const data = await res.json();
 
                 if (!res.ok) {
-                    if (authMode === 'signup' && data?.error && data.error.includes('already taken')) {
-                        errorEl.innerText = "That account already exists! Switching to Log In mode...";
+                    if (res.status === 404 && data?.error === "ACCOUNT_NOT_FOUND") {
+                        errorEl.innerHTML = `
+                            <p class="font-medium text-slate-200">No account found for "${username}".</p>
+                            <button type="button" onclick="switchAuthTab('signup'); submitAuthForm();" class="mt-2 w-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 py-1.5 rounded-lg text-xs font-bold transition">
+                                ✨ Click to Sign Up as "${username}"
+                            </button>
+                        `;
                         errorEl.classList.remove('hidden');
-                        setTimeout(() => {
-                            switchAuthTab('login');
-                            errorEl.innerText = "Please enter your password to log in.";
-                            errorEl.classList.remove('hidden');
-                        }, 1200);
                         return;
                     }
-                    errorEl.innerText = data?.error || "Something went wrong.";
+
+                    if (res.status === 409 || (authMode === 'signup' && data?.error && data.error.includes('already taken'))) {
+                        errorEl.innerHTML = `
+                            <p class="font-medium text-slate-200">Account "${username}" already exists!</p>
+                            <button type="button" onclick="switchAuthTab('login'); submitAuthForm();" class="mt-2 w-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 py-1.5 rounded-lg text-xs font-bold transition">
+                                🔑 Click to Log In as "${username}"
+                            </button>
+                        `;
+                        errorEl.classList.remove('hidden');
+                        return;
+                    }
+
+                    errorEl.innerHTML = `<span>${data?.error || data?.message || "Something went wrong."}</span>`;
                     errorEl.classList.remove('hidden');
                     return;
                 }
@@ -2242,12 +2256,13 @@
                 if (badge) badge.innerText = `👤 ${currentUser.username}`;
                 document.getElementById('auth-gate').classList.add('hidden');
                 initApp();
-            } catch (e) {
-                errorEl.innerText = "Couldn't reach the server. Please check your connection.";
+            } catch (err) {
+                console.error("Auth submit error:", err);
+                errorEl.innerHTML = "<span>Couldn't reach the server. Please check your connection.</span>";
                 errorEl.classList.remove('hidden');
             } finally {
                 submitBtn.disabled = false;
-                submitBtn.innerText = originalLabel;
+                submitBtn.innerText = authMode === 'login' ? "Log In" : "Sign Up";
             }
         }
 
