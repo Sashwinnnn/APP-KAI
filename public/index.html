@@ -738,129 +738,79 @@
             showCustomAlert(`Added ${tempReceiptItems.length} items to your pantry!`, "Receipt Saved", "🎉");
         }
 
-         async function loadShoppingList() {
-
+        async function loadShoppingList() {
             const container = document.getElementById('shopping-list-container');
-
             const totalHint = document.getElementById('shopping-total-hint');
-
             if (!container) return;
 
-            
-
             try {
-
                 const res = await fetch('/api/shopping-list');
-
                 const items = await res.json();
 
-                
-
-                if (items.length === 0) {
-
-                    container.innerHTML = `<p class="text-xs text-slate-500 text-center py-6">Shopping list is empty.</p>`;
-
+                if (!Array.isArray(items)) {
+                    console.error("Shopping list error:", items);
+                    container.innerHTML = `<p class="text-xs text-rose-400 text-center py-6">Could not load list: ${items?.error || 'Server error'}</p>`;
                     if (totalHint) totalHint.innerText = '';
-
                     return;
-
                 }
 
-
+                if (items.length === 0) {
+                    container.innerHTML = `<p class="text-xs text-slate-500 text-center py-6">Shopping list is empty.</p>`;
+                    if (totalHint) totalHint.innerText = '';
+                    return;
+                }
 
                 container.innerHTML = '';
-
                 let pricedTotal = 0;
-
                 let pricedCount = 0;
 
                 items.forEach(item => {
-
                     if (item.price !== null && item.price !== undefined) {
-
                         pricedTotal += Number(item.price);
-
                         pricedCount++;
-
                     }
 
                     const el = document.createElement('div');
-
                     el.className = `p-3.5 rounded-2xl flex items-center justify-between text-xs ${item.is_checked ? 'bg-white/2 opacity-50' : 'bg-white/5 border border-white/5'}`;
 
                     el.innerHTML = `
-
                         <div class="flex items-center gap-3 min-w-0 flex-1">
-
                             <input type="checkbox" ${item.is_checked ? 'checked' : ''} onchange="toggleShoppingChecked(${item.id}, this.checked)" class="w-4 h-4 rounded accent-emerald-500 cursor-pointer shrink-0">
-
                             <div class="min-w-0">
-
                                 <p class="font-bold text-white truncate ${item.is_checked ? 'line-through' : ''}">${item.name}</p>
-
                                 <span class="text-[10px] text-slate-400">Qty: ${item.quantity || '1'}</span>
-
                             </div>
-
                         </div>
 
                         <div class="flex items-center gap-2 shrink-0">
-
                             <div class="flex items-center gap-0.5 bg-black/30 border border-white/10 rounded-lg px-1.5">
-
                                 <span class="text-[10px] text-slate-500">$</span>
-
                                 <input type="number" step="0.01" min="0" value="${item.price !== null && item.price !== undefined ? item.price : ''}" placeholder="--"
-
                                     onchange="updateShoppingItemPrice(${item.id}, this.value)"
-
                                     class="w-14 bg-transparent text-white text-[11px] py-1.5 outline-none">
-
                             </div>
-
                             <button onclick="deleteShoppingItem(${item.id})" class="p-1.5 hover:bg-rose-500/20 rounded-lg text-slate-400 hover:text-rose-400 transition">
-
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-
                             </button>
-
                         </div>
-
                     `;
 
                     container.appendChild(el);
-
                 });
 
-
-
                 if (totalHint) {
-
                     if (pricedCount === items.length) {
-
                         totalHint.innerText = `Priced total: $${pricedTotal.toFixed(2)}`;
-
                     } else if (pricedCount > 0) {
-
                         totalHint.innerText = `Priced total so far: $${pricedTotal.toFixed(2)} (${items.length - pricedCount} item${items.length - pricedCount === 1 ? '' : 's'} unpriced — AI Trim will estimate them)`;
-
                     } else {
-
                         totalHint.innerText = `No prices entered yet — AI Trim will estimate them for you.`;
-
                     }
-
                 }
-
             } catch (e) {
-
                 console.error("Error loading shopping list:", e);
-
             }
-
         } 
-
-
 
         async function updateShoppingItemPrice(id, price) {
             await fetch(`/api/shopping-list/${id}`, {
@@ -874,18 +824,30 @@
         async function addShoppingItem() {
             const input = document.getElementById('shopping-input');
             const priceInput = document.getElementById('shopping-price-input');
+            if (!input) return;
             const name = input.value.trim();
             if (!name) return;
-            const price = priceInput.value.trim();
+            const price = priceInput ? priceInput.value.trim() : '';
 
-            await fetch('/api/shopping-list', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, category: 'Custom Items', price: price === '' ? null : Number(price) })
-            });
-            input.value = '';
-            priceInput.value = '';
-            loadShoppingList();
+            try {
+                const res = await fetch('/api/shopping-list', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, category: 'Custom Items', price: price === '' ? null : Number(price) })
+                });
+
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    showCustomAlert(errData?.error || "Could not add item to shopping list.", "Error", "⚠️");
+                    return;
+                }
+
+                input.value = '';
+                if (priceInput) priceInput.value = '';
+                await loadShoppingList();
+            } catch (err) {
+                showCustomAlert("Couldn't reach server to add item.", "Error", "⚠️");
+            }
         }
 
         async function toggleShoppingChecked(id, is_checked) {
@@ -1427,15 +1389,25 @@
         async function deductPantryStockForRecipe(usedIngredients) {
             if (!usedIngredients || usedIngredients.length === 0) return;
 
-            for (const rawIng of usedIngredients) {
-                const cleanedIng = rawIng.toLowerCase();
-                const matchedPantryItem = currentPantryItems.find(p => 
-                    cleanedIng.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(cleanedIng)
-                );
-
-                if (matchedPantryItem) {
-                    await fetch(`/api/pantry/${matchedPantryItem.id}`, { method: 'DELETE' });
+            try {
+                const res = await fetch('/api/pantry/deduct', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ingredients: usedIngredients })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.deductions && data.deductions.length > 0) {
+                        const summaryText = data.deductions.map(d => 
+                            `• ${d.name}: ${d.action === 'deleted' ? 'Finished (removed)' : 'Deducted (' + d.remaining + ' remaining)'}`
+                        ).join('\n');
+                        setTimeout(() => {
+                            showCustomAlert(`Pantry Stock Updated:\n\n${summaryText}`, "Ingredient Deduction", "📦");
+                        }, 600);
+                    }
                 }
+            } catch (err) {
+                console.error("Error deducting pantry items:", err);
             }
         }
 
@@ -1646,7 +1618,11 @@ async function loadSavingsDashboard() {
                 <button id="btn-add-missing" class="w-full bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-[11px] py-2 px-3 rounded-xl transition active:scale-95 flex items-center justify-center gap-1.5">
                     <span>🛒 Add Missing (${missing.length}) to Shopping List</span>
                 </button>
-            ` : ''}
+            ` : `
+                <button id="btn-add-all-ingredients" class="w-full bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 font-bold text-[11px] py-2 px-3 rounded-xl transition active:scale-95 flex items-center justify-center gap-1.5">
+                    <span>🛒 Add Ingredients to Shopping List</span>
+                </button>
+            `}
 
             ${!isRecipe && data.pantryAlternative ? `
                 <button id="btn-cook-alt" class="w-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] py-2.5 px-3 rounded-xl uppercase tracking-wider transition active:scale-95 flex items-center justify-center gap-2 shadow-lg">
@@ -1689,12 +1665,49 @@ async function loadSavingsDashboard() {
     const missingBtn = card.querySelector('#btn-add-missing');
     if (missingBtn) {
         missingBtn.onclick = async () => {
-            await fetch('/api/shopping-list/batch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ items: missing })
-            });
-            showCustomAlert(`Added missing items to your shopping list:\n• ${missing.join('\n• ')}`, "Shopping List Updated", "🛒");
+            try {
+                const res = await fetch('/api/shopping-list/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items: missing })
+                });
+                if (res.ok) {
+                    showCustomAlert(`Added missing items to your shopping list:\n• ${missing.join('\n• ')}`, "Shopping List Updated", "🛒");
+                    await loadShoppingList();
+                    if (typeof switchTab === 'function') switchTab('shopping', 'Shopping List');
+                } else {
+                    const errData = await res.json().catch(() => ({}));
+                    showCustomAlert(`Could not add items: ${errData.error || 'Server error'}`, "Error", "⚠️");
+                }
+            } catch (err) {
+                showCustomAlert("Couldn't reach server. Check your connection!", "Error", "⚠️");
+            }
+        };
+    }
+
+    // Handler: Add All Recipe Ingredients to Shopping List Button
+    const addAllBtn = card.querySelector('#btn-add-all-ingredients');
+    if (addAllBtn) {
+        addAllBtn.onclick = async () => {
+            const listToAdd = combinedIngredients.length > 0 ? combinedIngredients : ingredients;
+            if (!listToAdd || listToAdd.length === 0) return;
+            try {
+                const res = await fetch('/api/shopping-list/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items: listToAdd })
+                });
+                if (res.ok) {
+                    showCustomAlert(`Added ingredients to your shopping list:\n• ${listToAdd.join('\n• ')}`, "Shopping List Updated", "🛒");
+                    await loadShoppingList();
+                    if (typeof switchTab === 'function') switchTab('shopping', 'Shopping List');
+                } else {
+                    const errData = await res.json().catch(() => ({}));
+                    showCustomAlert(`Could not add items: ${errData.error || 'Server error'}`, "Error", "⚠️");
+                }
+            } catch (err) {
+                showCustomAlert("Couldn't reach server. Check your connection!", "Error", "⚠️");
+            }
         };
     }
 
@@ -1874,6 +1887,12 @@ async function loadSavingsDashboard() {
             initInstallBanner();
             document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') sendChatMessage();
+            });
+            document.getElementById('shopping-input')?.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') addShoppingItem();
+            });
+            document.getElementById('shopping-price-input')?.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') addShoppingItem();
             });
         }
 
