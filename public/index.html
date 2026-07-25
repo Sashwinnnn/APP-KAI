@@ -785,7 +785,7 @@
             reader.onload = async (e) => {
                 const imageBase64 = e.target.result;
                 try {
-                    openScanningModal("Analysing Grocery Receipt...", "KAI Vision is extracting all food items & expiration dates");
+                    openScanningModal("KAI is Reviewing Your Receipt...", "KAI Vision is extracting all food items & expiration dates");
                     const response = await authFetch('/api/pantry/scan-receipt', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -1283,7 +1283,7 @@
             const imageBase64 = canvas.toDataURL('image/jpeg', 0.85);
 
             if (shutter) shutter.disabled = true;
-            openScanningModal("Analysing Food Item...", "KAI Vision is scanning the image");
+            openScanningModal("KAI is Reviewing Your Image...", "KAI Vision is analyzing the food item details");
 
             try {
                 const response = await authFetch('/api/pantry/scan', {
@@ -2177,39 +2177,53 @@
             const signupTab = document.getElementById('auth-tab-signup');
             const submitBtn = document.getElementById('auth-submit-btn');
             const errorEl = document.getElementById('auth-error');
-            errorEl.classList.add('hidden');
+            if (errorEl) {
+                errorEl.classList.add('hidden');
+                errorEl.innerHTML = '';
+            }
 
             if (mode === 'login') {
-                loginTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition bg-white/10 text-white";
-                signupTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition text-slate-400";
-                submitBtn.innerText = "Log In";
-                document.getElementById('auth-password').setAttribute('autocomplete', 'current-password');
+                if (loginTab) loginTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition bg-white/10 text-white shadow-sm border border-white/10";
+                if (signupTab) signupTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition text-slate-400 hover:text-slate-200";
+                if (submitBtn) submitBtn.innerText = "Log In";
+                document.getElementById('auth-password')?.setAttribute('autocomplete', 'current-password');
             } else {
-                signupTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition bg-white/10 text-white";
-                loginTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition text-slate-400";
-                submitBtn.innerText = "Sign Up";
-                document.getElementById('auth-password').setAttribute('autocomplete', 'new-password');
+                if (signupTab) signupTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition bg-white/10 text-white shadow-sm border border-white/10";
+                if (loginTab) loginTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition text-slate-400 hover:text-slate-200";
+                if (submitBtn) submitBtn.innerText = "Sign Up";
+                document.getElementById('auth-password')?.setAttribute('autocomplete', 'new-password');
             }
         }
 
         async function submitAuthForm(e) {
-            if (e) e.preventDefault();
-            const username = document.getElementById('auth-username').value.trim();
-            const password = document.getElementById('auth-password').value;
+            if (e) {
+                if (typeof e.preventDefault === 'function') e.preventDefault();
+                if (typeof e.stopPropagation === 'function') e.stopPropagation();
+            }
+            const usernameInput = document.getElementById('auth-username');
+            const passwordInput = document.getElementById('auth-password');
+            const username = usernameInput ? usernameInput.value.trim() : '';
+            const password = passwordInput ? passwordInput.value : '';
             const errorEl = document.getElementById('auth-error');
             const submitBtn = document.getElementById('auth-submit-btn');
-            errorEl.classList.add('hidden');
-            errorEl.innerHTML = '';
+
+            if (errorEl) {
+                errorEl.classList.add('hidden');
+                errorEl.innerHTML = '';
+            }
 
             if (!username || !password) {
-                errorEl.innerHTML = "<span>Please enter both a username and password.</span>";
-                errorEl.classList.remove('hidden');
+                if (errorEl) {
+                    errorEl.innerHTML = "<span>Please enter both a username and password.</span>";
+                    errorEl.classList.remove('hidden');
+                }
                 return;
             }
 
-            submitBtn.disabled = true;
-            const originalLabel = submitBtn.innerText;
-            submitBtn.innerText = "Processing...";
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerText = authMode === 'login' ? "Logging in..." : "Creating account...";
+            }
 
             try {
                 const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/signup';
@@ -2222,29 +2236,35 @@
 
                 if (!res.ok) {
                     if (res.status === 404 && data?.error === "ACCOUNT_NOT_FOUND") {
-                        errorEl.innerHTML = `
-                            <p class="font-medium text-slate-200">No account found for "${username}".</p>
-                            <button type="button" onclick="switchAuthTab('signup'); submitAuthForm();" class="mt-2 w-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 py-1.5 rounded-lg text-xs font-bold transition">
-                                ✨ Click to Sign Up as "${username}"
-                            </button>
-                        `;
-                        errorEl.classList.remove('hidden');
+                        if (errorEl) {
+                            errorEl.innerHTML = `
+                                <p class="font-medium text-slate-200">No account found for "${username}".</p>
+                                <button type="button" onclick="switchAuthTab('signup')" class="mt-2 w-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 py-1.5 rounded-lg text-xs font-bold transition">
+                                    ✨ Click to switch to Sign Up
+                                </button>
+                            `;
+                            errorEl.classList.remove('hidden');
+                        }
                         return;
                     }
 
                     if (res.status === 409 || (authMode === 'signup' && data?.error && data.error.includes('already taken'))) {
-                        errorEl.innerHTML = `
-                            <p class="font-medium text-slate-200">Account "${username}" already exists!</p>
-                            <button type="button" onclick="switchAuthTab('login'); submitAuthForm();" class="mt-2 w-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 py-1.5 rounded-lg text-xs font-bold transition">
-                                🔑 Click to Log In as "${username}"
-                            </button>
-                        `;
-                        errorEl.classList.remove('hidden');
+                        if (errorEl) {
+                            errorEl.innerHTML = `
+                                <p class="font-medium text-slate-200">Account "${username}" already exists!</p>
+                                <button type="button" onclick="switchAuthTab('login')" class="mt-2 w-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 py-1.5 rounded-lg text-xs font-bold transition">
+                                    🔑 Click to switch to Log In
+                                </button>
+                            `;
+                            errorEl.classList.remove('hidden');
+                        }
                         return;
                     }
 
-                    errorEl.innerHTML = `<span>${data?.error || data?.message || "Something went wrong."}</span>`;
-                    errorEl.classList.remove('hidden');
+                    if (errorEl) {
+                        errorEl.innerHTML = `<span>${data?.error || data?.message || "Something went wrong."}</span>`;
+                        errorEl.classList.remove('hidden');
+                    }
                     return;
                 }
 
@@ -2258,11 +2278,15 @@
                 initApp();
             } catch (err) {
                 console.error("Auth submit error:", err);
-                errorEl.innerHTML = "<span>Couldn't reach the server. Please check your connection.</span>";
-                errorEl.classList.remove('hidden');
+                if (errorEl) {
+                    errorEl.innerHTML = "<span>Couldn't reach the server. Please check your connection.</span>";
+                    errorEl.classList.remove('hidden');
+                }
             } finally {
-                submitBtn.disabled = false;
-                submitBtn.innerText = authMode === 'login' ? "Log In" : "Sign Up";
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = authMode === 'login' ? "Log In" : "Sign Up";
+                }
             }
         }
 
@@ -2310,9 +2334,6 @@
 
         window.addEventListener('DOMContentLoaded', () => {
             checkAuthAndInit();
-            document.getElementById('auth-password')?.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') submitAuthForm();
-            });
         });
 
         // 1. Listen for clicks if the app is already open in a tab
