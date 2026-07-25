@@ -25,7 +25,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || "kai-dev-secret-change-me";
 if (!process.env.SESSION_SECRET) {
     console.warn("⚠️ SESSION_SECRET is not set — using an insecure default. Set SESSION_SECRET in your environment before real users sign up.");
 }
-const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const SESSION_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000; // 1 year (365 days)
 
 function base64url(input) {
     return Buffer.from(input).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -102,10 +102,14 @@ function verifyPassword(password, salt, hash) {
     }
 }
 
-// Attaches req.userId if a valid session cookie is present, without blocking the request.
+// Attaches req.userId if a valid session cookie or Bearer token is present.
 function attachUser(req, res, next) {
     const cookies = parseCookies(req);
-    const uid = verifySession(cookies.kai_session);
+    let token = cookies.kai_session;
+    if (!token && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+        token = req.headers.authorization.split(' ')[1];
+    }
+    const uid = verifySession(token);
     req.userId = uid || null;
     next();
 }
@@ -304,8 +308,9 @@ app.post('/api/auth/signup', async (req, res) => {
             console.log(`📦 Claimed pre-existing data for account: ${cleanUsername}`);
         }
 
-        setSessionCookie(res, signSession(newUserId));
-        res.status(201).json({ id: newUserId, username: cleanUsername });
+        const token = signSession(newUserId);
+        setSessionCookie(res, token);
+        res.status(201).json({ id: newUserId, username: cleanUsername, token });
     } catch (err) {
         console.error("❌ Error signing up:", err);
         res.status(500).json({ error: "Signup error: " + err.message });
@@ -342,8 +347,9 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(401).json({ error: "Incorrect username or password." });
         }
 
-        setSessionCookie(res, signSession(user.id));
-        res.json({ id: user.id, username: user.username });
+        const token = signSession(user.id);
+        setSessionCookie(res, token);
+        res.json({ id: user.id, username: user.username, token });
     } catch (err) {
         console.error("❌ Error logging in:", err);
         res.status(500).json({ error: err.message });
@@ -998,6 +1004,144 @@ app.delete('/api/history/:id', requireAuth, async (req, res) => {
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+// 🥗 DAILY MACROS & NUTRITION ENDPOINTS
+
+// GET: Fetch today's logged macros, totals & user target goals
+app.get('/api/macros/today', requireAuth, async (req, res) => {
+    try {
+        const db = await getDbConnection();
+        const today = new Date().toISOString().split('T')[0];
+        const rows = await db.all(
+            "SELECT * FROM daily_macros WHERE user_id = ? AND log_date = ? ORDER BY id DESC",
+            [req.userId, today]
+        );
+
+        const user = await db.get(
+            "SELECT target_calories, target_protein_g, target_carbs_g, target_fat_g FROM users WHERE id = ?",
+            [req.userId]
+        );
+        
+        const goals = {
+            target_calories: user?.target_calories || 2000,
+            target_protein_g: user?.target_protein_g || 150,
+            target_carbs_g: user?.target_carbs_g || 200,
+            target_fat_g: user?.target_fat_g || 65
+        };
+        
+        const totals = rows.reduce((acc, curr) => {
+            acc.calories += Number(curr.calories) || 0;
+            acc.protein += Number(curr.protein_g) || 0;
+            acc.carbs += Number(curr.carbs_g) || 0;
+            acc.fat += Number(curr.fat_g) || 0;
+            return acc;
+        }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+        res.json({ date: today, items: rows, totals, goals });
+    } catch (err) {
+        console.error("❌ Error fetching daily macros:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST: Update user custom daily macro targets
+app.post('/api/macros/goals', requireAuth, async (req, res) => {
+    try {
+        const { target_calories, target_protein_g, target_carbs_g, target_fat_g } = req.body;
+        const db = await getDbConnection();
+        await db.run(
+            `UPDATE users SET target_calories = ?, target_protein_g = ?, target_carbs_g = ?, target_fat_g = ? WHERE id = ?`,
+            [
+                Math.max(500, Math.min(10000, Number(target_calories) || 2000)),
+                Math.max(10, Math.min(500, Number(target_protein_g) || 150)),
+                Math.max(10, Math.min(1000, Number(target_carbs_g) || 200)),
+                Math.max(5, Math.min(300, Number(target_fat_g) || 65)),
+                req.userId
+            ]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        console.error("❌ Error updating macro goals:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST: Add a new macro entry for today
+app.post('/api/macros', requireAuth, async (req, res) => {
+    try {
+        const { food_name, calories, protein_g, carbs_g, fat_g, log_date } = req.body;
+        if (!food_name) return res.status(400).json({ error: "Food name is required" });
+
+        const db = await getDbConnection();
+        const today = log_date || new Date().toISOString().split('T')[0];
+
+        const result = await db.run(
+            `INSERT INTO daily_macros (user_id, log_date, food_name, calories, protein_g, carbs_g, fat_g)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [
+                req.userId,
+                today,
+                food_name.trim(),
+                Math.round(Number(calories) || 0),
+                Math.round((Number(protein_g) || 0) * 10) / 10,
+                Math.round((Number(carbs_g) || 0) * 10) / 10,
+                Math.round((Number(fat_g) || 0) * 10) / 10
+            ]
+        );
+
+        res.status(201).json({ success: true, id: result.lastID });
+    } catch (err) {
+        console.error("❌ Error adding macro entry:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST: AI Macro estimation helper
+app.post('/api/macros/estimate', requireAuth, checkDailyLimitOnly, async (req, res) => {
+    try {
+        const { food_name } = req.body;
+        if (!food_name) return res.status(400).json({ error: "Food name is required" });
+
+        const response = await ai.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: [{
+                text: `Estimate typical nutritional macros for this food item or meal: "${food_name}". Return estimated calories (kcal integer), protein (grams number), carbs (grams number), and fat (grams number). Be realistic.`
+            }],
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        calories: { type: Type.INTEGER },
+                        protein_g: { type: Type.NUMBER },
+                        carbs_g: { type: Type.NUMBER },
+                        fat_g: { type: Type.NUMBER }
+                    },
+                    required: ["calories", "protein_g", "carbs_g", "fat_g"]
+                }
+            }
+        });
+        await recordAiUsage(req.userId, 1);
+        const estimates = JSON.parse(response.text);
+        res.json({ success: true, estimates });
+    } catch (err) {
+        await recordAiUsage(req.userId, 1);
+        console.error("❌ Error estimating macros with AI:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// DELETE: Remove a macro entry
+app.delete('/api/macros/:id', requireAuth, async (req, res) => {
+    try {
+        const db = await getDbConnection();
+        await db.run("DELETE FROM daily_macros WHERE id = ? AND user_id = ?", [req.params.id, req.userId]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error("❌ Error removing macro entry:", err);
+        res.status(500).json({ error: err.message });
     }
 });
 
