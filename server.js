@@ -211,6 +211,37 @@ initDatabase().then(async () => {
         console.warn("⚠️ Could not ensure daily_usage table exists:", usageErr.message);
     }
 
+    // Recipe step logs (Cook Again) and daily macro/nutrition logs — both
+    // were referenced throughout the API but never created anywhere, which
+    // broke signup, meal logging, and the entire Macros tab.
+    try {
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS recipe_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recipe_name TEXT NOT NULL,
+                recipe_steps TEXT,
+                ingredients_used TEXT,
+                time_taken_minutes INTEGER,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                user_id INTEGER
+            )
+        `);
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS daily_macros (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                log_date DATE DEFAULT CURRENT_DATE,
+                food_name TEXT NOT NULL,
+                calories INTEGER DEFAULT 0,
+                protein_g REAL DEFAULT 0,
+                carbs_g REAL DEFAULT 0,
+                fat_g REAL DEFAULT 0
+            )
+        `);
+    } catch (extraTablesErr) {
+        console.warn("⚠️ Could not ensure recipe_logs/daily_macros tables exist:", extraTablesErr.message);
+    }
+
     // Lightweight migrations — wrapped individually so one failure doesn't block the rest.
     // SQLite throws "duplicate column" if a column already exists, which we treat as a no-op.
     const migrations = [
@@ -222,7 +253,11 @@ initDatabase().then(async () => {
         `ALTER TABLE shopping_list ADD COLUMN category TEXT DEFAULT 'Custom Items'`,
         `ALTER TABLE shopping_list ADD COLUMN is_essential INTEGER DEFAULT 0`,
         `ALTER TABLE shopping_list ADD COLUMN price REAL`,
-        `ALTER TABLE shopping_list ADD COLUMN user_id INTEGER`
+        `ALTER TABLE shopping_list ADD COLUMN user_id INTEGER`,
+        `ALTER TABLE users ADD COLUMN target_calories INTEGER DEFAULT 2000`,
+        `ALTER TABLE users ADD COLUMN target_protein_g REAL DEFAULT 150`,
+        `ALTER TABLE users ADD COLUMN target_carbs_g REAL DEFAULT 200`,
+        `ALTER TABLE users ADD COLUMN target_fat_g REAL DEFAULT 65`
     ];
     for (const sql of migrations) {
         try {
