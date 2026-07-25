@@ -318,22 +318,27 @@ app.post('/api/auth/signup', async (req, res) => {
 });
 
 const loginAttempts = new Map(); // ip -> [timestamps]
-const LOGIN_MAX_PER_WINDOW = 10;
+const LOGIN_MAX_PER_WINDOW = 15;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
-function isLoginRateLimited(ip) {
+function recordFailedLogin(ip) {
     const now = Date.now();
     const attempts = (loginAttempts.get(ip) || []).filter(t => now - t < LOGIN_WINDOW_MS);
     attempts.push(now);
     loginAttempts.set(ip, attempts);
-    return attempts.length > LOGIN_MAX_PER_WINDOW;
+}
+
+function isLoginRateLimited(ip) {
+    const now = Date.now();
+    const attempts = (loginAttempts.get(ip) || []).filter(t => now - t < LOGIN_WINDOW_MS);
+    return attempts.length >= LOGIN_MAX_PER_WINDOW;
 }
 
 app.post('/api/auth/login', async (req, res) => {
     try {
         const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
         if (isLoginRateLimited(clientIp)) {
-            return res.status(429).json({ error: "Too many login attempts. Please wait a few minutes and try again." });
+            return res.status(429).json({ error: "Too many failed attempts. Please wait a few minutes." });
         }
 
         const { username, password } = req.body;
@@ -343,8 +348,14 @@ app.post('/api/auth/login', async (req, res) => {
 
         const db = await getDbConnection();
         const user = await db.get("SELECT * FROM users WHERE username = ? COLLATE NOCASE", [username.trim()]);
-        if (!user || !verifyPassword(password, user.password_salt, user.password_hash)) {
-            return res.status(401).json({ error: "Incorrect username or password." });
+        if (!user) {
+            recordFailedLogin(clientIp);
+            return res.status(404).json({ error: "ACCOUNT_NOT_FOUND", message: `No account found for "${username.trim()}".` });
+        }
+
+        if (!verifyPassword(password, user.password_salt, user.password_hash)) {
+            recordFailedLogin(clientIp);
+            return res.status(401).json({ error: "Incorrect password. Please try again." });
         }
 
         const token = signSession(user.id);
