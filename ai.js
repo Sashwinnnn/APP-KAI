@@ -1,29 +1,12 @@
 import 'dotenv/config';
+import { GoogleGenAI } from '@google/genai';
 
-/* ===================== FREE AI PROVIDERS =====================
-   Replaces Gemini entirely. Two free providers, used for different jobs:
+/* ===================== AI PROVIDERS =====================
+   Supports Gemini via @google/genai as primary provider when
+   GEMINI_API_KEY is present, with fallback to Groq and OpenRouter.
+   ======================================================== */
 
-   - OpenRouter: used for image analysis (pantry scan, receipt scan) via a
-     free vision-capable model, and as a text fallback.
-   - Groq: used first for text-only jobs (chat, macro estimates, price
-     estimates) since it's fast and has a more generous free tier — Groq's
-     vision models are still "preview" and not reliable for production, so
-     they're deliberately not used here.
-
-   Both are OpenAI-compatible /chat/completions APIs, so this file is the
-   only place that needs to change if you swap providers or models later.
-
-   IMPORTANT: free model IDs on OpenRouter change/get retired over time.
-   If scanning or chat suddenly starts failing with a 404/"model not found"
-   error, check https://openrouter.ai/models?max_price=0 for current free
-   vision models and update OPENROUTER_VISION_MODEL below (or in your .env).
-
-   By default this uses OpenRouter's "openrouter/free" auto-router, which
-   picks whichever free model is currently live instead of one hardcoded
-   model ID — this avoids the app breaking every time a specific :free
-   model gets retired (which happens without much notice).
-================================================================= */
-
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
@@ -31,26 +14,30 @@ const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 const VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'openrouter/free';
 
-// Text models to try in order. Each entry is skipped automatically if its
-// API key isn't set, so this works fine with only one of the two keys
-// configured.
-const TEXT_MODEL_CHAIN = [
-    { provider: 'groq', url: GROQ_URL, apiKey: GROQ_API_KEY, model: process.env.GROQ_TEXT_MODEL || 'llama-3.3-70b-versatile' },
-    { provider: 'openrouter', url: OPENROUTER_URL, apiKey: OPENROUTER_API_KEY, model: process.env.OPENROUTER_TEXT_MODEL || 'openrouter/free' },
-    { provider: 'openrouter', url: OPENROUTER_URL, apiKey: OPENROUTER_API_KEY, model: process.env.OPENROUTER_TEXT_MODEL_2 || 'deepseek/deepseek-chat-v3.1:free' }
-];
+let geminiClient = null;
+function getGeminiClient() {
+    if (!geminiClient && GEMINI_API_KEY) {
+        geminiClient = new GoogleGenAI({
+            apiKey: GEMINI_API_KEY,
+            httpOptions: {
+                headers: {
+                    'User-Agent': 'aistudio-build'
+                }
+            }
+        });
+    }
+    return geminiClient;
+}
 
 function extractJSON(text) {
     if (!text) return null;
-    // Models sometimes wrap JSON in markdown fences even when told not to.
     const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
     try {
         return JSON.parse(cleaned);
     } catch {
-        // Last resort: grab the first {...} or [...] block in the text.
         const match = cleaned.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
         if (match) {
-            try { return JSON.parse(match[0]); } catch { /* give up below */ }
+            try { return JSON.parse(match[0]); } catch { /* ignore */ }
         }
         return null;
     }
@@ -62,7 +49,6 @@ async function callChatCompletions({ url, apiKey, model, messages, temperature }
         'Authorization': `Bearer ${apiKey}`
     };
     if (url === OPENROUTER_URL) {
-        // OpenRouter asks for these but doesn't require them; harmless either way.
         headers['HTTP-Referer'] = process.env.APP_URL || 'https://kai-kitchen.local';
         headers['X-Title'] = 'KAI Kitchen AI';
     }
@@ -88,12 +74,36 @@ async function callChatCompletions({ url, apiKey, model, messages, temperature }
 
 /**
  * Analyze an image (pantry item photo or receipt) and return parsed JSON.
- * Always goes through OpenRouter's free vision model — requires
- * OPENROUTER_API_KEY to be set.
  */
 export async function analyzeImageForJSON({ imageBase64, mimeType = 'image/jpeg', prompt }) {
+    if (process.env.GEMINI_API_KEY) {
+        try {
+            const ai = getGeminiClient();
+            const response = await ai.models.generateContent({
+                model: 'gemini-3.6-flash',
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [
+                            { text: `${prompt}\n\nRespond with ONLY a raw JSON object — no markdown, no code fences, no explanation before or after it.` },
+                            { inlineData: { mimeType, data: imageBase64 } }
+                        ]
+                    }
+                ],
+                config: { temperature: 0.2, responseMimeType: 'application/json' }
+            });
+            const text = response.text;
+            const parsed = extractJSON(text);
+            if (parsed) {
+                return { parsed, callsMade: 1, modelUsed: 'gemini:gemini-3.6-flash' };
+            }
+        } catch (err) {
+            console.warn(`⚠️ Gemini image analysis failed: ${err.message}. Trying OpenRouter...`);
+        }
+    }
+
     if (!OPENROUTER_API_KEY) {
-        throw new Error('OPENROUTER_API_KEY is not set. Add it to your .env to enable AI image scanning.');
+        throw new Error('Neither GEMINI_API_KEY nor OPENROUTER_API_KEY is configured for AI image scanning.');
     }
 
     const messages = [
@@ -120,25 +130,52 @@ export async function analyzeImageForJSON({ imageBase64, mimeType = 'image/jpeg'
 }
 
 /**
- * Text/JSON completion with automatic fallback across free providers.
- * Tries Groq first (fast, generous limits), then OpenRouter free models.
- *
- * @param {object} opts
- * @param {string} opts.systemPrompt - instructions + required JSON shape
- * @param {Array<{role: string, content: string}>} opts.messages - conversation turns
- * @param {number} [opts.temperature]
- * @param {(parsed: any) => boolean} [opts.validate] - optional quality check;
- *        if it returns false, the next model in the chain is tried instead
- *        of accepting a low-quality response.
+ * Text/JSON completion with automatic fallback across Gemini, Groq, and OpenRouter.
  */
 export async function generateTextJSON({ systemPrompt, messages, temperature = 0.3, validate }) {
     let lastError = null;
     let callsMade = 0;
-    let attemptedAny = false;
 
-    for (const { provider, url, apiKey, model } of TEXT_MODEL_CHAIN) {
-        if (!apiKey) continue; // this provider isn't configured — skip it
-        attemptedAny = true;
+    // 1. Try Gemini first if key exists
+    if (process.env.GEMINI_API_KEY) {
+        try {
+            callsMade++;
+            const ai = getGeminiClient();
+
+            // Convert conversation messages format to prompt/history or combined prompt for Gemini
+            let formattedPrompt = `${systemPrompt}\n\nRespond with ONLY a raw JSON object — no markdown, no code fences, no explanation before or after it.\n\n`;
+            for (const msg of messages) {
+                formattedPrompt += `[${msg.role.toUpperCase()}]: ${msg.content}\n`;
+            }
+
+            const response = await ai.models.generateContent({
+                model: 'gemini-3.6-flash',
+                contents: formattedPrompt,
+                config: { temperature, responseMimeType: 'application/json' }
+            });
+
+            const parsed = extractJSON(response.text);
+            if (parsed && (!validate || validate(parsed))) {
+                return { parsed, callsMade, modelUsed: 'gemini:gemini-3.6-flash' };
+            }
+            if (parsed && validate && !validate(parsed)) {
+                console.warn(`⚠️ Gemini returned low-quality content. Trying next provider...`);
+            }
+        } catch (err) {
+            console.warn(`⚠️ Gemini text generation failed: ${err.message}. Trying next provider...`);
+            lastError = err;
+        }
+    }
+
+    // 2. Fall back to Groq and OpenRouter
+    const textChain = [
+        { provider: 'groq', url: GROQ_URL, apiKey: GROQ_API_KEY, model: process.env.GROQ_TEXT_MODEL || 'llama-3.3-70b-versatile' },
+        { provider: 'openrouter', url: OPENROUTER_URL, apiKey: OPENROUTER_API_KEY, model: process.env.OPENROUTER_TEXT_MODEL || 'openrouter/free' },
+        { provider: 'openrouter', url: OPENROUTER_URL, apiKey: OPENROUTER_API_KEY, model: process.env.OPENROUTER_TEXT_MODEL_2 || 'deepseek/deepseek-chat-v3.1:free' }
+    ];
+
+    for (const { provider, url, apiKey, model } of textChain) {
+        if (!apiKey) continue;
 
         try {
             callsMade++;
@@ -167,8 +204,8 @@ export async function generateTextJSON({ systemPrompt, messages, temperature = 0
         }
     }
 
-    if (!attemptedAny) {
-        throw new Error('No AI provider is configured. Set GROQ_API_KEY and/or OPENROUTER_API_KEY in your .env.');
+    if (!process.env.GEMINI_API_KEY && !GROQ_API_KEY && !OPENROUTER_API_KEY) {
+        throw new Error('No AI provider is configured. Set GEMINI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY in your environment.');
     }
     throw lastError || new Error('All configured AI providers failed to respond.');
 }
