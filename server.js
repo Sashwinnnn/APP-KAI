@@ -11,12 +11,26 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json({ limit: '12mb' }));
 app.use(express.static('public'));
 
-if (process.env.PUBLIC_VAPID_KEY && process.env.PRIVATE_VAPID_KEY) {
+let vapidPublic = process.env.PUBLIC_VAPID_KEY;
+let vapidPrivate = process.env.PRIVATE_VAPID_KEY;
+
+if (!vapidPublic || !vapidPrivate) {
+    try {
+        const autoKeys = webpush.generateVAPIDKeys();
+        vapidPublic = autoKeys.publicKey;
+        vapidPrivate = autoKeys.privateKey;
+        console.log("🔑 Auto-generated VAPID keys for background Web Push notifications.");
+    } catch (e) {
+        console.warn("⚠️ Could not generate VAPID keys automatically:", e.message);
+    }
+}
+
+if (vapidPublic && vapidPrivate) {
     try {
         webpush.setVapidDetails(
             process.env.VAPID_SUBJECT || 'mailto:support@kai.app',
-            process.env.PUBLIC_VAPID_KEY,
-            process.env.PRIVATE_VAPID_KEY
+            vapidPublic,
+            vapidPrivate
         );
         console.log("🔔 Web Push VAPID keys configured successfully.");
     } catch (err) {
@@ -1421,7 +1435,7 @@ REQUIRED JSON OUTPUT SHAPE (always return exactly this shape, no extra fields):
 
 // GET: Fetch public VAPID key
 app.get('/api/push/vapid-key', (req, res) => {
-    res.json({ publicKey: process.env.PUBLIC_VAPID_KEY || null });
+    res.json({ publicKey: vapidPublic || null });
 });
 
 // POST: Save push subscription for logged in user
@@ -1439,6 +1453,9 @@ app.post('/api/push/subscribe', requireAuth, async (req, res) => {
              req.userId, subscription.keys.p256dh, subscription.keys.auth]
         );
         res.json({ success: true, message: "Push subscription saved" });
+        
+        // Trigger background expiration check immediately for this user's subscription
+        setTimeout(() => checkAndSendBackgroundExpirationPushes(), 1000);
     } catch (err) {
         console.error("❌ Error saving push subscription:", err);
         res.status(500).json({ error: err.message });
@@ -1448,8 +1465,8 @@ app.post('/api/push/subscribe', requireAuth, async (req, res) => {
 // POST: Trigger a test push notification
 app.post('/api/push/send-test', requireAuth, async (req, res) => {
     try {
-        if (!process.env.PUBLIC_VAPID_KEY || !process.env.PRIVATE_VAPID_KEY) {
-            return res.status(400).json({ error: "VAPID keys are not configured in environment variables." });
+        if (!vapidPublic || !vapidPrivate) {
+            return res.status(400).json({ error: "VAPID keys are not available on server." });
         }
         const db = await getDbConnection();
         const subs = await db.all("SELECT * FROM push_subscriptions WHERE user_id = ?", [req.userId]);
@@ -1458,9 +1475,10 @@ app.post('/api/push/send-test', requireAuth, async (req, res) => {
         }
 
         const payload = JSON.stringify({
-            title: "KAI Notification Test",
-            body: "Your smart kitchen push notifications are working perfectly!",
-            recipeId: ""
+            title: "KAI Expiration Alert! 🚨",
+            body: "Organic Milk expires tomorrow! Tap to open flashcard cooking deck.",
+            itemName: "Organic Milk",
+            url: "/?cookItem=Organic%20Milk"
         });
 
         let sentCount = 0;
@@ -1487,7 +1505,103 @@ app.post('/api/push/send-test', requireAuth, async (req, res) => {
     }
 });
 
+// 🤖 AUTOMATED BACKGROUND PUSH WORKER (Triggers native system notifications even when app is closed)
+async function checkAndSendBackgroundExpirationPushes() {
+    if (!vapidPublic || !vapidPrivate) return;
+
+    try {
+        const db = await getDbConnection();
+        const subscriptions = await db.all("SELECT * FROM push_subscriptions");
+        if (!subscriptions || subscriptions.length === 0) return;
+
+        const todayStr = new Date().toISOString().split('T')[0];
+        const todayDate = new Date(todayStr);
+
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS sent_push_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                pantry_item_id INTEGER NOT NULL,
+                notification_type TEXT NOT NULL,
+                sent_date TEXT NOT NULL,
+                UNIQUE(user_id, pantry_item_id, notification_type, sent_date)
+            )
+        `);
+
+        for (const sub of subscriptions) {
+            const userItems = await db.all(
+                "SELECT * FROM pantry WHERE user_id = ? AND expiry_date IS NOT NULL AND expiry_date != ''",
+                [sub.user_id]
+            );
+
+            for (const item of userItems) {
+                const expiryDate = new Date(item.expiry_date);
+                if (isNaN(expiryDate.getTime())) continue;
+
+                const diffTime = expiryDate.getTime() - todayDate.getTime();
+                const diffDays = Math.ceil(diffTime / (1000 * 3600 * 24));
+
+                let notifType = null;
+                let title = "";
+                let body = "";
+
+                if (diffDays < 0) {
+                    notifType = 'expired';
+                    title = `KAI Expiration Alert: ${item.name} Expired! 🚨`;
+                    body = `${item.name} expired on ${item.expiry_date}. Tap to cook before discarding!`;
+                } else if (diffDays <= 1) {
+                    notifType = 'expiring_soon';
+                    title = `KAI Expiration Alert: ${item.name} Expiring Soon! ⚠️`;
+                    body = `${item.name} expires ${diffDays === 0 ? 'today' : 'tomorrow'}. Tap to generate a flashcard recipe deck!`;
+                }
+
+                if (notifType) {
+                    const alreadySent = await db.get(
+                        "SELECT id FROM sent_push_logs WHERE user_id = ? AND pantry_item_id = ? AND notification_type = ? AND sent_date = ?",
+                        [sub.user_id, item.id, notifType, todayStr]
+                    );
+
+                    if (!alreadySent) {
+                        const payload = JSON.stringify({
+                            title: title,
+                            body: body,
+                            itemName: item.name,
+                            url: `/?cookItem=${encodeURIComponent(item.name)}`
+                        });
+
+                        const pushSub = {
+                            endpoint: sub.endpoint,
+                            keys: { p256dh: sub.p256dh, auth: sub.auth }
+                        };
+
+                        try {
+                            await webpush.sendNotification(pushSub, payload);
+                            await db.run(
+                                "INSERT INTO sent_push_logs (user_id, pantry_item_id, notification_type, sent_date) VALUES (?, ?, ?, ?)",
+                                [sub.user_id, item.id, notifType, todayStr]
+                            );
+                            console.log(`🔔 Auto background Web Push dispatched to device (User ${sub.user_id}) for ${item.name}`);
+                        } catch (pushErr) {
+                            if (pushErr.statusCode === 410 || pushErr.statusCode === 404) {
+                                await db.run("DELETE FROM push_subscriptions WHERE id = ?", [sub.id]);
+                            } else {
+                                console.warn(`⚠️ Auto background push failed for ${item.name}:`, pushErr.message);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.error("❌ Background push worker error:", err.message);
+    }
+}
+
+// Background scheduler — runs every 60 seconds
+setInterval(checkAndSendBackgroundExpirationPushes, 60000);
+
 // Listener Setup
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
+    setTimeout(() => checkAndSendBackgroundExpirationPushes(), 5000);
 });
