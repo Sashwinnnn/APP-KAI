@@ -1,17 +1,31 @@
 import express from 'express';
 import crypto from 'crypto';
+import webpush from 'web-push';
 import { initDatabase, getDbConnection } from './database.js';
 import { analyzeImageForJSON, generateTextJSON } from './ai.js';
 import 'dotenv/config';
 
 const app = express();
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '12mb' }));
 app.use(express.static('public'));
 
-if (!process.env.OPENROUTER_API_KEY && !process.env.GROQ_API_KEY) {
-    console.warn("⚠️ Neither OPENROUTER_API_KEY nor GROQ_API_KEY is set — AI features (scan, chat, macros) will fail until at least one is configured in your .env.");
+if (process.env.PUBLIC_VAPID_KEY && process.env.PRIVATE_VAPID_KEY) {
+    try {
+        webpush.setVapidDetails(
+            process.env.VAPID_SUBJECT || 'mailto:support@kai.app',
+            process.env.PUBLIC_VAPID_KEY,
+            process.env.PRIVATE_VAPID_KEY
+        );
+        console.log("🔔 Web Push VAPID keys configured successfully.");
+    } catch (err) {
+        console.warn("⚠️ Failed to configure Web Push VAPID details:", err.message);
+    }
+}
+
+if (!process.env.GEMINI_API_KEY && !process.env.OPENROUTER_API_KEY && !process.env.GROQ_API_KEY) {
+    console.warn("⚠️ Neither GEMINI_API_KEY, OPENROUTER_API_KEY nor GROQ_API_KEY is set — AI features (scan, chat, macros) will fail until at least one is configured.");
 }
 
 /* ===================== AUTH: sessions & password hashing =====================
@@ -235,6 +249,16 @@ initDatabase().then(async () => {
                 protein_g REAL DEFAULT 0,
                 carbs_g REAL DEFAULT 0,
                 fat_g REAL DEFAULT 0
+            )
+        `);
+        await db.run(`
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                endpoint TEXT UNIQUE NOT NULL,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         `);
     } catch (extraTablesErr) {
@@ -1393,7 +1417,77 @@ REQUIRED JSON OUTPUT SHAPE (always return exactly this shape, no extra fields):
     }
 });
 
+// 🔔 WEB PUSH NOTIFICATION ENDPOINTS
+
+// GET: Fetch public VAPID key
+app.get('/api/push/vapid-key', (req, res) => {
+    res.json({ publicKey: process.env.PUBLIC_VAPID_KEY || null });
+});
+
+// POST: Save push subscription for logged in user
+app.post('/api/push/subscribe', requireAuth, async (req, res) => {
+    try {
+        const { subscription } = req.body;
+        if (!subscription || !subscription.endpoint || !subscription.keys) {
+            return res.status(400).json({ error: "Invalid subscription object" });
+        }
+        const db = await getDbConnection();
+        await db.run(
+            `INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)
+             ON CONFLICT(endpoint) DO UPDATE SET user_id = ?, p256dh = ?, auth = ?`,
+            [req.userId, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth,
+             req.userId, subscription.keys.p256dh, subscription.keys.auth]
+        );
+        res.json({ success: true, message: "Push subscription saved" });
+    } catch (err) {
+        console.error("❌ Error saving push subscription:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST: Trigger a test push notification
+app.post('/api/push/send-test', requireAuth, async (req, res) => {
+    try {
+        if (!process.env.PUBLIC_VAPID_KEY || !process.env.PRIVATE_VAPID_KEY) {
+            return res.status(400).json({ error: "VAPID keys are not configured in environment variables." });
+        }
+        const db = await getDbConnection();
+        const subs = await db.all("SELECT * FROM push_subscriptions WHERE user_id = ?", [req.userId]);
+        if (!subs || subs.length === 0) {
+            return res.status(404).json({ error: "No push subscriptions found for this account. Enable notifications first." });
+        }
+
+        const payload = JSON.stringify({
+            title: "KAI Notification Test",
+            body: "Your smart kitchen push notifications are working perfectly!",
+            recipeId: ""
+        });
+
+        let sentCount = 0;
+        for (const sub of subs) {
+            try {
+                const pushSub = {
+                    endpoint: sub.endpoint,
+                    keys: { p256dh: sub.p256dh, auth: sub.auth }
+                };
+                await webpush.sendNotification(pushSub, payload);
+                sentCount++;
+            } catch (pushErr) {
+                console.warn(`⚠️ Failed to send push to endpoint ${sub.endpoint}:`, pushErr.message);
+                if (pushErr.statusCode === 410 || pushErr.statusCode === 404) {
+                    await db.run("DELETE FROM push_subscriptions WHERE id = ?", [sub.id]);
+                }
+            }
+        }
+
+        res.json({ success: true, sentCount });
+    } catch (err) {
+        console.error("❌ Error sending test push notification:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Listener Setup
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
 });
