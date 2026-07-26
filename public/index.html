@@ -713,15 +713,24 @@
         };
 
         /* IN-APP GLASS MODALS SYSTEM */
-        function showCustomAlert(message, title = "Notice", icon = "💡") {
+        function showCustomAlert(message, title = "Notice", icon = "💡", isLocked = false) {
             document.getElementById('alert-title').innerText = title;
             document.getElementById('alert-message').innerText = message;
             document.getElementById('alert-icon-container').innerText = icon;
-            document.getElementById('alert-actions').innerHTML = `
-                <button onclick="closeCustomAlert()" class="w-full bg-white/10 hover:bg-white/20 border border-white/15 text-white py-2.5 rounded-xl font-bold text-xs transition">
-                    OK
-                </button>
-            `;
+            if (isLocked) {
+                document.getElementById('alert-actions').innerHTML = `
+                    <div class="w-full flex items-center justify-center py-2 text-emerald-400 gap-2 text-xs font-bold animate-pulse">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                        Preparing flashcard cooking deck...
+                    </div>
+                `;
+            } else {
+                document.getElementById('alert-actions').innerHTML = `
+                    <button onclick="closeCustomAlert()" class="w-full bg-white/10 hover:bg-white/20 border border-white/15 text-white py-2.5 rounded-xl font-bold text-xs transition">
+                        OK
+                    </button>
+                `;
+            }
             document.getElementById('universal-alert-modal').classList.remove('hidden');
         }
 
@@ -1850,22 +1859,313 @@
 
         /* NOTIFICATIONS & CHAT */
         function toggleNotificationTray() {
-            document.getElementById('notification-tray').classList.toggle('hidden');
+            const tray = document.getElementById('notification-tray');
+            if (tray) {
+                const willOpen = tray.classList.contains('hidden');
+                tray.classList.toggle('hidden');
+                if (willOpen) {
+                    updateNotificationTray();
+                }
+            }
         }
+
         function clearAllNotifications() {
-            document.getElementById('notification-dot').classList.add('hidden');
+            document.getElementById('notification-dot')?.classList.add('hidden');
+            updateNotificationTray(true);
         }
+
         function checkPantryExpirations() {
+            updateNotificationTray();
+        }
+
+        function updateNotificationTray(forceCleared = false) {
+            const container = document.getElementById('tray-items-container');
             const dot = document.getElementById('notification-dot');
-            if (!dot) return;
+            if (!container) return;
+
             const today = new Date();
-            today.setHours(0,0,0,0);
-            const expired = currentPantryItems.some(i => {
-                const parts = i.expiry_date.split('-');
-                const exp = new Date(parts[0], parts[1]-1, parts[2]);
-                return exp < today;
+            today.setHours(0, 0, 0, 0);
+
+            const alerts = [];
+
+            if (!forceCleared && Array.isArray(currentPantryItems)) {
+                currentPantryItems.forEach(i => {
+                    if (!i.expiry_date) return;
+                    const parts = i.expiry_date.split('-');
+                    if (parts.length < 3) return;
+                    const exp = new Date(parts[0], parts[1] - 1, parts[2]);
+                    exp.setHours(0, 0, 0, 0);
+                    const diffDays = Math.round((exp - today) / (1000 * 60 * 60 * 24));
+
+                    if (diffDays < 0) {
+                        alerts.push({
+                            id: i.id,
+                            name: i.name,
+                            type: 'expired',
+                            icon: '🚨',
+                            title: `${i.name} Expired`,
+                            desc: `Expired ${Math.abs(diffDays)} day(s) ago (${i.expiry_date}). Delete or replace.`
+                        });
+                    } else if (diffDays <= 3) {
+                        alerts.push({
+                            id: i.id,
+                            name: i.name,
+                            type: 'soon',
+                            icon: '⚠️',
+                            title: `${i.name} Expiring Soon`,
+                            desc: `Expires in ${diffDays === 0 ? 'today' : diffDays + ' day(s)'} (${i.expiry_date}). Use it in a recipe!`
+                        });
+                    }
+                });
+            }
+
+            if (dot) {
+                dot.classList.toggle('hidden', alerts.length === 0);
+            }
+
+            let pushStatusHTML = `
+                <div class="glass-panel p-3 rounded-2xl border border-white/10 bg-white/[0.02] flex items-center justify-between gap-2 mb-3">
+                    <div class="min-w-0 flex-1">
+                        <p class="font-bold text-white text-xs">🔔 Kitchen Expiration Alerts</p>
+                        <p class="text-[10px] text-slate-400 truncate">Receive alerts when pantry food expires</p>
+                    </div>
+                    <button onclick="enableAppNotifications()" class="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-xl text-[10px] font-bold transition active:scale-95 shrink-0">
+                        Enable Notifications
+                    </button>
+                </div>
+            `;
+
+            if (window.Notification && Notification.permission === 'granted') {
+                pushStatusHTML = `
+                    <div class="glass-panel p-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 flex items-center justify-between gap-2 mb-3">
+                        <div class="min-w-0 flex-1">
+                            <p class="font-bold text-emerald-300 text-xs flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span> Notifications Enabled
+                            </p>
+                            <p class="text-[10px] text-slate-400 truncate">PWA & browser alerts active</p>
+                        </div>
+                        <button onclick="sendTestPushNotification()" class="bg-white/10 hover:bg-white/20 text-white border border-white/15 px-3 py-1.5 rounded-xl text-[10px] font-bold transition active:scale-95 shrink-0">
+                            Test Alert
+                        </button>
+                    </div>
+                `;
+            }
+
+            if (alerts.length === 0) {
+                container.innerHTML = `
+                    ${pushStatusHTML}
+                    <div class="my-auto text-center py-10">
+                        <span class="text-2xl block mb-2 opacity-40">✨</span>
+                        <p class="text-slate-300 text-xs font-bold">All Quiet in the Pantry</p>
+                        <p class="text-slate-500 text-[10px] mt-1">No expired or urgent items found.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = pushStatusHTML + alerts.map(a => `
+                <div class="glass-panel p-3 rounded-2xl border border-white/10 bg-white/[0.02] flex items-start justify-between gap-3 animate-fade-in mb-2">
+                    <div class="flex items-start gap-2.5 min-w-0">
+                        <span class="text-lg shrink-0 mt-0.5">${a.icon}</span>
+                        <div class="min-w-0">
+                            <p class="font-bold text-white text-xs truncate">${a.title}</p>
+                            <p class="text-[10px] text-slate-400 leading-snug mt-0.5">${a.desc}</p>
+                        </div>
+                    </div>
+                    ${a.type === 'soon' ? `
+                        <button onclick="cookExpiringItemDirectly('${a.name.replace(/'/g, "\\'")}')" class="shrink-0 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition active:scale-95">
+                            Cook
+                        </button>
+                    ` : `
+                        <button onclick="removeItemFromAlert(${a.id})" class="shrink-0 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition active:scale-95">
+                            Remove
+                        </button>
+                    `}
+                </div>
+            `).join('');
+        }
+
+        async function cookExpiringItemDirectly(itemName) {
+            toggleNotificationTray();
+            
+            showCustomAlert(`KAI is generating a flashcard cooking deck for ${itemName}...`, "Preparing Cooking Deck", "🍳", true);
+
+            try {
+                const response = await authFetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: `Create a quick recipe using my expiring ${itemName} and what's in my pantry. Return recipe JSON with title, ingredients, and steps.`,
+                        history: [],
+                        pantry: currentPantryItems
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const recipeTitle = data.recipeTitle || (data.pantryAlternative ? data.pantryAlternative.title : `Quick ${itemName} Dish`);
+                    const ingredients = (data.ingredients && data.ingredients.length > 0) ? data.ingredients : [itemName, "Pantry Oil", "Salt & Seasoning"];
+                    const steps = (data.steps && data.steps.length > 0) ? data.steps : [
+                        `Prep your ${itemName} and any complementary pantry ingredients.`,
+                        `Heat skillet or oven and cook ${itemName} until golden and tender.`,
+                        `Season generously and serve hot!`
+                    ];
+
+                    closeCustomAlert();
+                    openRecipeModal({
+                        recipeTitle: recipeTitle,
+                        ingredients: ingredients,
+                        steps: steps
+                    });
+                } else {
+                    throw new Error("Chat response failed");
+                }
+            } catch (err) {
+                closeCustomAlert();
+                console.error("Error generating alert recipe:", err);
+                openRecipeModal({
+                    recipeTitle: `Quick Sautéed ${itemName}`,
+                    ingredients: [itemName, "Cooking Oil or Butter", "Salt & Pepper"],
+                    steps: [
+                        `Wash and slice ${itemName} into bite-sized pieces.`,
+                        `Heat 1 tbsp oil in a pan over medium heat.`,
+                        `Sauté for 5-8 minutes until cooked through. Season to taste and enjoy!`
+                    ]
+                });
+            }
+        }
+
+        function askKaiRecipeForAlert(itemName) {
+            toggleNotificationTray();
+            if (typeof switchTab === 'function') switchTab('chat', 'Ask KAI');
+            const chatInput = document.getElementById('chat-input');
+            if (chatInput) {
+                chatInput.value = `What can I make with my ${itemName} before it expires?`;
+                sendChatMessage();
+            }
+        }
+
+        function removeItemFromAlert(itemId) {
+            showCustomConfirm("Remove expired item from pantry?", async () => {
+                await authFetch(`/api/pantry/${itemId}`, { method: 'DELETE' });
+                fetchPantryItems();
+            }, "Remove Item");
+        }
+
+        async function showNativeNotification(title, options = {}) {
+            if (!('Notification' in window)) return false;
+            let perm = Notification.permission;
+            if (perm !== 'granted') {
+                perm = await Notification.requestPermission();
+                if (perm !== 'granted') return false;
+            }
+
+            const defaultOpts = {
+                icon: '/icons/icon-192.png',
+                badge: '/icons/icon-192.png',
+                vibrate: [200, 100, 200],
+                data: { url: '/' },
+                ...options
+            };
+
+            if ('serviceWorker' in navigator) {
+                try {
+                    const reg = await navigator.serviceWorker.ready;
+                    if (reg && reg.showNotification) {
+                        await reg.showNotification(title, defaultOpts);
+                        return true;
+                    }
+                } catch (swErr) {
+                    console.warn("SW showNotification failed, trying fallback:", swErr);
+                }
+            }
+
+            try {
+                new Notification(title, defaultOpts);
+                return true;
+            } catch (err) {
+                console.error("Native notification failed:", err);
+                return false;
+            }
+        }
+
+        async function enableAppNotifications() {
+            if (!('Notification' in window)) {
+                showCustomAlert("Notifications are not supported by this browser.", "Not Supported", "🚫");
+                return;
+            }
+
+            try {
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') {
+                    showCustomAlert("Notification permission was not granted.", "Permission Required", "⚠️");
+                    return;
+                }
+
+                await showNativeNotification("KAI Kitchen Alerts Active! 🔔", {
+                    body: "Notifications enabled! You will get native phone alerts when food is expiring.",
+                    tag: "kai-welcome-alert"
+                });
+
+                if ('serviceWorker' in navigator && 'PushManager' in window) {
+                    try {
+                        const vapidRes = await fetch('/api/push/vapid-key');
+                        const { publicKey } = await vapidRes.json();
+                        if (publicKey) {
+                            const reg = await navigator.serviceWorker.ready;
+                            const subscription = await reg.pushManager.subscribe({
+                                userVisibleOnly: true,
+                                applicationServerKey: urlBase64ToUint8Array(publicKey)
+                            });
+                            await authFetch('/api/push/subscribe', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ subscription })
+                            });
+                        }
+                    } catch (pushErr) {
+                        console.warn("Push subscription optional setup:", pushErr.message);
+                    }
+                }
+
+                showCustomAlert("Notifications enabled! A native test alert was popped on your device.", "Notifications Active", "🔔");
+                updateNotificationTray();
+
+            } catch (err) {
+                console.error("Error enabling notifications:", err);
+                showCustomAlert(`Error enabling notifications: ${err.message}`, "Notification Error", "⚠️");
+            }
+        }
+
+        async function sendTestPushNotification() {
+            const popped = await showNativeNotification("KAI Expiration Alert! 🚨", {
+                body: "Organic Milk expires tomorrow! Tap to open flashcard cooking deck.",
+                tag: "pantry-test-alert",
+                data: { url: "/" }
             });
-            dot.classList.toggle('hidden', !expired);
+
+            try {
+                const res = await authFetch('/api/push/send-test', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    showCustomAlert("Test notification popped! Check your phone's notification bar.", "Notification Dispatched", "🚀");
+                } else {
+                    showCustomAlert(popped ? "Native notification popped on device!" : (data.error || "Failed to trigger push."), "Notification Status", "📱");
+                }
+            } catch (err) {
+                showCustomAlert(popped ? "Native notification popped on device!" : "Network error contacting server.", "Notification Status", "📱");
+            }
+        }
+
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
         }
 
         /* KAI AI CHAT ENGINE */
