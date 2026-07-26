@@ -2060,11 +2060,16 @@
                 if (perm !== 'granted') return false;
             }
 
+            const itemName = options.itemName || 'Organic Milk';
+
             const defaultOpts = {
                 icon: '/icons/icon-192.png',
                 badge: '/icons/icon-192.png',
                 vibrate: [200, 100, 200],
-                data: { url: '/' },
+                data: {
+                    itemName: itemName,
+                    url: `/?cookItem=${encodeURIComponent(itemName)}`
+                },
                 ...options
             };
 
@@ -2081,7 +2086,12 @@
             }
 
             try {
-                new Notification(title, defaultOpts);
+                const notif = new Notification(title, defaultOpts);
+                notif.onclick = function() {
+                    window.focus();
+                    cookExpiringItemDirectly(itemName);
+                    notif.close();
+                };
                 return true;
             } catch (err) {
                 console.error("Native notification failed:", err);
@@ -2104,7 +2114,8 @@
 
                 await showNativeNotification("KAI Kitchen Alerts Active! 🔔", {
                     body: "Notifications enabled! You will get native phone alerts when food is expiring.",
-                    tag: "kai-welcome-alert"
+                    tag: "kai-welcome-alert",
+                    itemName: "Organic Milk"
                 });
 
                 if ('serviceWorker' in navigator && 'PushManager' in window) {
@@ -2141,19 +2152,19 @@
             const popped = await showNativeNotification("KAI Expiration Alert! 🚨", {
                 body: "Organic Milk expires tomorrow! Tap to open flashcard cooking deck.",
                 tag: "pantry-test-alert",
-                data: { url: "/" }
+                itemName: "Organic Milk"
             });
 
             try {
                 const res = await authFetch('/api/push/send-test', { method: 'POST' });
                 const data = await res.json();
                 if (res.ok) {
-                    showCustomAlert("Test notification popped! Check your phone's notification bar.", "Notification Dispatched", "🚀");
+                    showCustomAlert("Test notification popped! Tap it to open KAI's flashcard recipe generator.", "Notification Dispatched", "🚀");
                 } else {
-                    showCustomAlert(popped ? "Native notification popped on device!" : (data.error || "Failed to trigger push."), "Notification Status", "📱");
+                    showCustomAlert(popped ? "Native notification popped! Tap it to open flashcard recipe." : (data.error || "Failed to trigger push."), "Notification Status", "📱");
                 }
             } catch (err) {
-                showCustomAlert(popped ? "Native notification popped on device!" : "Network error contacting server.", "Notification Status", "📱");
+                showCustomAlert(popped ? "Native notification popped! Tap it to open flashcard recipe." : "Network error contacting server.", "Notification Status", "📱");
             }
         }
 
@@ -2631,24 +2642,28 @@
             checkAuthAndInit();
         });
 
-        // 1. Listen for clicks if the app is already open in a tab
-if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('message', (event) => {
-        if (event.data && event.data.type === 'OPEN_RECIPE_MODAL') {
-            triggerRecipeModal(event.data.recipeId);
+        // 1. Listen for notification clicks if the app is already open
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                if (event.data && event.data.type === 'COOK_EXPIRING_ITEM') {
+                    cookExpiringItemDirectly(event.data.itemName || 'Organic Milk');
+                } else if (event.data && event.data.type === 'OPEN_RECIPE_MODAL') {
+                    triggerRecipeModal(event.data.recipeId);
+                }
+            });
         }
-    });
-}
 
-// 2. Open the recipe modal if the app was opened fresh from a background notification
-window.addEventListener('DOMContentLoaded', () => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const recipeId = urlParams.get('openRecipe');
-    if (recipeId) {
-        window.history.replaceState({}, document.title, window.location.pathname);
-        triggerRecipeModal(recipeId);
-    }
-});
+        // 2. Open modal lock & recipe generator if app opened fresh from notification link
+        window.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const cookItem = urlParams.get('cookItem');
+            if (cookItem) {
+                window.history.replaceState({}, document.title, window.location.pathname);
+                setTimeout(() => {
+                    cookExpiringItemDirectly(cookItem);
+                }, 400);
+            }
+        });
 
 // 3. Connect to your existing recipe modal function
 function triggerRecipeModal(recipeId) {
