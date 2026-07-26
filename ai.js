@@ -17,6 +17,11 @@ import 'dotenv/config';
    If scanning or chat suddenly starts failing with a 404/"model not found"
    error, check https://openrouter.ai/models?max_price=0 for current free
    vision models and update OPENROUTER_VISION_MODEL below (or in your .env).
+
+   By default this uses OpenRouter's "openrouter/free" auto-router, which
+   picks whichever free model is currently live instead of one hardcoded
+   model ID — this avoids the app breaking every time a specific :free
+   model gets retired (which happens without much notice).
 ================================================================= */
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
@@ -24,15 +29,15 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
-const VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'meta-llama/llama-3.2-11b-vision-instruct:free';
+const VISION_MODEL = process.env.OPENROUTER_VISION_MODEL || 'openrouter/free';
 
 // Text models to try in order. Each entry is skipped automatically if its
 // API key isn't set, so this works fine with only one of the two keys
 // configured.
 const TEXT_MODEL_CHAIN = [
     { provider: 'groq', url: GROQ_URL, apiKey: GROQ_API_KEY, model: process.env.GROQ_TEXT_MODEL || 'llama-3.3-70b-versatile' },
-    { provider: 'openrouter', url: OPENROUTER_URL, apiKey: OPENROUTER_API_KEY, model: process.env.OPENROUTER_TEXT_MODEL || 'deepseek/deepseek-chat-v3.1:free' },
-    { provider: 'openrouter', url: OPENROUTER_URL, apiKey: OPENROUTER_API_KEY, model: process.env.OPENROUTER_TEXT_MODEL_2 || 'meta-llama/llama-3.3-70b-instruct:free' }
+    { provider: 'openrouter', url: OPENROUTER_URL, apiKey: OPENROUTER_API_KEY, model: process.env.OPENROUTER_TEXT_MODEL || 'openrouter/free' },
+    { provider: 'openrouter', url: OPENROUTER_URL, apiKey: OPENROUTER_API_KEY, model: process.env.OPENROUTER_TEXT_MODEL_2 || 'deepseek/deepseek-chat-v3.1:free' }
 ];
 
 function extractJSON(text) {
