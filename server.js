@@ -1,7 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
-import { GoogleGenAI, Type } from '@google/genai';
 import { initDatabase, getDbConnection } from './database.js';
+import { analyzeImageForJSON, generateTextJSON } from './ai.js';
 import 'dotenv/config';
 
 const app = express();
@@ -10,10 +10,9 @@ const PORT = process.env.PORT || 4000;
 app.use(express.json({ limit: '12mb' }));
 app.use(express.static('public'));
 
-const apiKey = process.env.GEMINI_API_KEY || "";
-console.log(`🔑 Checking API Key: Starts with: ${apiKey.slice(0, 6)}...`);
-
-const ai = new GoogleGenAI({ apiKey: apiKey });
+if (!process.env.OPENROUTER_API_KEY && !process.env.GROQ_API_KEY) {
+    console.warn("⚠️ Neither OPENROUTER_API_KEY nor GROQ_API_KEY is set — AI features (scan, chat, macros) will fail until at least one is configured in your .env.");
+}
 
 /* ===================== AUTH: sessions & password hashing =====================
    Self-contained (no new npm packages) so this can't break `npm install` on deploy.
@@ -468,7 +467,7 @@ app.post('/api/pantry', requireAuth, async (req, res) => {
     }
 });
 
-// 📸 POST: Analyze image with Gemini (Food/Pantry Scan)
+// 📸 POST: Analyze image with AI (Food/Pantry Scan)
 app.post('/api/pantry/scan', requireAuth, checkDailyLimitOnly, async (req, res) => {
     const { image } = req.body;
     if (!image) {
@@ -477,44 +476,25 @@ app.post('/api/pantry/scan', requireAuth, checkDailyLimitOnly, async (req, res) 
 
     try {
         const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
-        console.log("🤖 Sending image to Gemini for food analysis...");
+        console.log("🤖 Sending image to AI for food analysis...");
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-3.5-flash',
-            contents: [
-                {
-                    inlineData: {
-                        mimeType: 'image/jpeg',
-                        data: base64Data
-                    }
-                },
-                `You are KAI, an advanced kitchen assistant. Analyze this kitchen camera shot. 
-                Identify:
-                1. The name of the grocery or raw food item.
-                2. The approximate quantity or pack volume.
-                3. The expiration date. 
-                
-                CRITICAL INSTRUCTION: If no expiration date is physically printed or visible, estimate a highly realistic date counting forward from today's date (${new Date().toISOString().split('T')[0]}). For example, milk expires in ~10 days, avocados in ~5 days, chicken in ~3 days.
-                
-                Return a JSON object with fields: name, quantity, expiry_date, storage (Fridge/Freezer/Pantry). Return as a SINGLE object, not an array.`,
-            ],
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        name: { type: Type.STRING },
-                        quantity: { type: Type.STRING },
-                        expiry_date: { type: Type.STRING },
-                        storage: { type: Type.STRING }
-                    },
-                    required: ["name", "quantity", "expiry_date"]
-                }
-            }
-        });
-        await recordAiUsage(req.userId, 1);
+        const prompt = `You are KAI, an advanced kitchen assistant. Analyze this kitchen camera shot.
+Identify:
+1. The name of the grocery or raw food item.
+2. The approximate quantity or pack volume.
+3. The expiration date.
 
-        const scannedItem = JSON.parse(response.text);
+CRITICAL INSTRUCTION: If no expiration date is physically printed or visible, estimate a highly realistic date counting forward from today's date (${new Date().toISOString().split('T')[0]}). For example, milk expires in ~10 days, avocados in ~5 days, chicken in ~3 days.
+
+Return a JSON object with EXACTLY these fields: "name" (string), "quantity" (string), "expiry_date" (string, YYYY-MM-DD), "storage" (string: "Fridge", "Freezer", or "Pantry"). Return a SINGLE JSON object, not an array, not wrapped in markdown.`;
+
+        const { parsed: scannedItem, callsMade } = await analyzeImageForJSON({ imageBase64: base64Data, mimeType: 'image/jpeg', prompt });
+        await recordAiUsage(req.userId, callsMade);
+
+        if (!scannedItem || !scannedItem.name) {
+            throw new Error("AI did not return a recognizable item.");
+        }
+
         res.json({ success: true, item: scannedItem });
     } catch (error) {
         await recordAiUsage(req.userId, 1); // the call was still made (and billed) even though it errored
@@ -523,15 +503,14 @@ app.post('/api/pantry/scan', requireAuth, checkDailyLimitOnly, async (req, res) 
     }
 });
 
-// 💬 POST: Chat with Contextual AI Agent (Multi-Tier Fallback Edition)
+// 💬 POST: Chat with Contextual AI Agent (Multi-Provider Fallback Edition)
 app.post('/api/chat', requireAuth, checkDailyLimitOnly, async (req, res) => {
-    let modelCallsMade = 0;
     try {
         const { message, history, pantry } = req.body;
 
         let pantryContext = "The user's pantry is currently completely empty.";
         if (pantry && pantry.length > 0) {
-            pantryContext = "The user has the following items in their pantry right now:\n" + 
+            pantryContext = "The user has the following items in their pantry right now:\n" +
                 pantry.map(item => `- ${item.name} (Quantity: ${item.quantity || 1}, Expires: ${item.expiry_date || 'N/A'}, ID: ${item.id})`).join('\n');
         }
 
@@ -556,11 +535,23 @@ CRITICAL RECIPE STEP GENERATION RULES (only apply when "wantsRecipe" is true; ap
 
 STRICT DEDUPLICATION:
 - Return all required ingredients for the requested dish in the "ingredients" array.
-- If ingredients are missing from the user's pantry, include those missing item names in the "missingIngredients" array.`;
+- If ingredients are missing from the user's pantry, include those missing item names in the "missingIngredients" array.
+
+REQUIRED JSON OUTPUT SHAPE (always return exactly this shape, no extra fields):
+{
+  "reply": string,
+  "wantsRecipe": boolean,
+  "isRecipe": boolean,
+  "recipeTitle": string,
+  "ingredients": string[],
+  "steps": string[],
+  "missingIngredients": string[],
+  "pantryAlternative": { "title": string, "ingredients": string[], "steps": string[] } | null
+}`;
 
         const contextualizedUserMessage = `[SYSTEM NOTE: Live pantry database supplied]\n${pantryContext}\n\nUser's message: ${message}`;
 
-        const contents = [];
+        const chatMessages = [];
         if (history && history.length > 0) {
             const recentHistory = history.slice(-4);
             recentHistory.forEach(turn => {
@@ -572,22 +563,13 @@ STRICT DEDUPLICATION:
                 } else {
                     contentText = JSON.stringify(turn.content);
                 }
-
-                contents.push({
-                    role: turn.role === "assistant" ? "model" : "user",
-                    parts: [{ text: contentText }]
+                chatMessages.push({
+                    role: turn.role === "assistant" ? "assistant" : "user",
+                    content: contentText
                 });
             });
         }
-        
-        contents.push({ role: "user", parts: [{ text: contextualizedUserMessage }] });
-
-        const modelsToTry = [
-            "gemini-3.5-flash",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-flash-latest"
-        ];
+        chatMessages.push({ role: "user", content: contextualizedUserMessage });
 
         // Guards against empty or "heat and serve"-style placeholder instructions slipping through.
         const BANNED_STEP_PHRASES = [
@@ -618,103 +600,15 @@ STRICT DEDUPLICATION:
             return true;
         };
 
-        let response = null;
-        let lastError = null;
+        const { parsed: parsedResult, callsMade } = await generateTextJSON({
+            systemPrompt: systemInstruction,
+            messages: chatMessages,
+            temperature: 0.3,
+            validate: isQualityResponse
+        });
 
-        for (const modelName of modelsToTry) {
-            try {
-                console.log(`📡 Attempting API call with model: ${modelName}...`);
-                modelCallsMade++;
-                response = await ai.models.generateContent({
-                    model: modelName,
-                    contents: contents,
-                    config: {
-                     systemInstruction: systemInstruction, 
-                    temperature: 0.2, 
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            reply: { type: Type.STRING },
-                            wantsRecipe: {
-                                type: Type.BOOLEAN,
-                                description: "True only if the user is explicitly asking for a recipe, meal idea, or what to cook. False for casual chat, questions, or anything else."
-                            },
-                            isRecipe: { type: Type.BOOLEAN },
-                            recipeTitle: { type: Type.STRING },
-                            ingredients: {
-                                type: Type.ARRAY,
-                                items: { type: Type.STRING },
-                                description: "Full list of ingredients needed for the primary recipe."
-                            },
-                            steps: {
-                                type: Type.ARRAY,
-                                items: { type: Type.STRING },
-                                description: "At least 4 explicit, chronological cooking instructions for the primary recipe."
-                            },
-                            missingIngredients: {
-                                type: Type.ARRAY,
-                                items: { type: Type.STRING },
-                                description: "List of ingredients missing from pantry."
-                            },
-                            pantryAlternative: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    title: { type: Type.STRING },
-                                    ingredients: {
-                                        type: Type.ARRAY,
-                                        items: { type: Type.STRING },
-                                        description: "Ingredients needed for alternative recipe using on-hand items, each with a real quantity. Never empty."
-                                    },
-                                    steps: {
-                                        type: Type.ARRAY,
-                                        items: { type: Type.STRING },
-                                        description: "At least 4 explicit, specific, chronological cooking instructions (real times/temps/techniques) for the alternative recipe. Never empty, never vague."
-                                    }
-                                },
-                                required: ["title", "ingredients", "steps"]
-                            }
-                        },
-                        required: ["reply", "wantsRecipe", "isRecipe", "ingredients", "steps", "missingIngredients"]
-                    }
-                }
-            });
+        await recordAiUsage(req.userId, callsMade);
 
-            if (response && response.text) {
-                    let candidateParsed;
-                    try {
-                        candidateParsed = JSON.parse(response.text);
-                    } catch (parseErr) {
-                        console.warn(`⚠️ Model ${modelName} returned unparseable JSON. Trying next option...`);
-                        response = null;
-                        lastError = parseErr;
-                        continue;
-                    }
-
-                    if (!isQualityResponse(candidateParsed)) {
-                        console.warn(`⚠️ Model ${modelName} returned empty/vague recipe content. Trying next option...`);
-                        response = null;
-                        lastError = new Error(`Model ${modelName} returned low-quality recipe content.`);
-                        continue;
-                    }
-
-                    console.log(`✅ Success with model: ${modelName}`);
-                    break;
-                }
-            } catch (err) {
-                console.warn(`⚠️ Model ${modelName} failed or busy. Trying next option... (Error: ${err.message})`);
-                lastError = err;
-            }
-        }
-
-        if (!response || !response.text) {
-            await recordAiUsage(req.userId, modelCallsMade);
-            throw lastError || new Error("All Gemini models failed to respond.");
-        }
-
-        await recordAiUsage(req.userId, modelCallsMade);
-        const parsedResult = JSON.parse(response.text);
-        
         const uniqueIngredients = Array.from(new Set(
             (parsedResult.ingredients || []).map(i => i.trim().toLowerCase())
         )).map(i => {
@@ -744,9 +638,9 @@ STRICT DEDUPLICATION:
         console.error("❌ BACKEND CRASH ERROR LOG:", error.stack || error);
 
         const isQuotaError = (
-            (error && (error.code === 429 || (error.error && error.error.code === 429))) ||
-            (error && (error.status === 'RESOURCE_EXHAUSTED')) ||
-            (error && error.message && error.message.toLowerCase().includes('quota'))
+            (error && error.message && error.message.toLowerCase().includes('quota')) ||
+            (error && error.message && error.message.toLowerCase().includes('rate limit')) ||
+            (error && error.message && error.message.includes('429'))
         );
 
         if (isQuotaError) {
@@ -1150,27 +1044,15 @@ app.post('/api/macros/estimate', requireAuth, checkDailyLimitOnly, async (req, r
         const { food_name } = req.body;
         if (!food_name) return res.status(400).json({ error: "Food name is required" });
 
-        const response = await ai.models.generateContent({
-            model: "gemini-3.5-flash",
-            contents: [{
-                text: `Estimate typical nutritional macros for this food item or meal: "${food_name}". Return estimated calories (kcal integer), protein (grams number), carbs (grams number), and fat (grams number). Be realistic.`
-            }],
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        calories: { type: Type.INTEGER },
-                        protein_g: { type: Type.NUMBER },
-                        carbs_g: { type: Type.NUMBER },
-                        fat_g: { type: Type.NUMBER }
-                    },
-                    required: ["calories", "protein_g", "carbs_g", "fat_g"]
-                }
-            }
+        const { parsed: estimates, callsMade } = await generateTextJSON({
+            systemPrompt: `You are a nutrition estimation engine. Given a food item or meal description, estimate its typical nutritional macros. Return realistic values.
+
+REQUIRED JSON OUTPUT SHAPE (always return exactly this shape, no extra fields):
+{ "calories": integer, "protein_g": number, "carbs_g": number, "fat_g": number }`,
+            messages: [{ role: 'user', content: `Estimate typical nutritional macros for this food item or meal: "${food_name}".` }],
+            temperature: 0.2
         });
-        await recordAiUsage(req.userId, 1);
-        const estimates = JSON.parse(response.text);
+        await recordAiUsage(req.userId, callsMade);
         res.json({ success: true, estimates });
     } catch (err) {
         await recordAiUsage(req.userId, 1);
@@ -1404,12 +1286,7 @@ app.post('/api/pantry/scan-receipt', requireAuth, checkDailyLimitOnly, async (re
         const { imageBase64 } = req.body; 
         if (!imageBase64) return res.status(400).json({ error: "No receipt image data received." });
 
-        const imagePart = {
-            inlineData: {
-                data: imageBase64.split(",")[1] || imageBase64,
-                mimeType: "image/jpeg"
-            }
-        };
+        const rawBase64 = imageBase64.split(",")[1] || imageBase64;
 
         const prompt = `You are a high-speed store receipt data extraction engine. 
         Analyze this receipt image and extract all identifiable food items, ingredients, or groceries.
@@ -1427,14 +1304,9 @@ app.post('/api/pantry/scan-receipt', requireAuth, checkDailyLimitOnly, async (re
           ]
         }`;
 
-        const response = await ai.models.generateContent({
-            model: "gemini-3.5-flash", 
-            contents: [prompt, imagePart],
-            config: { responseMimeType: "application/json" }
-        });
-        await recordAiUsage(req.userId, 1);
+        const { parsed: parsedData, callsMade } = await analyzeImageForJSON({ imageBase64: rawBase64, mimeType: 'image/jpeg', prompt });
+        await recordAiUsage(req.userId, callsMade);
 
-        const parsedData = JSON.parse(response.text);
         res.json({ items: parsedData.items || [] });
 
     } catch (error) {
@@ -1461,36 +1333,16 @@ app.post('/api/shopping-list/trim', requireAuth, checkDailyLimitOnly, async (req
 
         if (unpricedItems.length > 0) {
             const itemsList = unpricedItems.map(i => `- ${i.name} (qty: ${i.quantity || '1'})`).join('\n');
-            const response = await ai.models.generateContent({
-                model: "gemini-3.5-flash",
-                contents: [{
-                    text: `You are a grocery pricing assistant. For each item below, give your best realistic estimate of its typical US grocery store price for the given quantity, and whether it's a kitchen essential (staple, protein, core ingredient) vs a nice-to-have/optional item.\n\n${itemsList}\n\nBe realistic and specific with prices — no rounding to guesses like $5 for everything.`
-                }],
-                config: {
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            items: {
-                                type: Type.ARRAY,
-                                items: {
-                                    type: Type.OBJECT,
-                                    properties: {
-                                        name: { type: Type.STRING },
-                                        estimatedPrice: { type: Type.NUMBER, description: "Realistic USD price estimate for this item at the given quantity." },
-                                        essential: { type: Type.BOOLEAN }
-                                    },
-                                    required: ["name", "estimatedPrice", "essential"]
-                                }
-                            }
-                        },
-                        required: ["items"]
-                    }
-                }
+            const { parsed, callsMade } = await generateTextJSON({
+                systemPrompt: `You are a grocery pricing assistant. For each item given, provide your best realistic estimate of its typical US grocery store price for the given quantity, and whether it's a kitchen essential (staple, protein, core ingredient) vs a nice-to-have/optional item. Be realistic and specific with prices — no rounding to guesses like $5 for everything.
+
+REQUIRED JSON OUTPUT SHAPE (always return exactly this shape, no extra fields):
+{ "items": [ { "name": string, "estimatedPrice": number, "essential": boolean } ] }`,
+                messages: [{ role: 'user', content: itemsList }],
+                temperature: 0.2
             });
 
-            const parsed = JSON.parse(response.text);
-            await recordAiUsage(req.userId, 1);
+            await recordAiUsage(req.userId, callsMade);
             (parsed.items || []).forEach(i => {
                 estimates[i.name.trim().toLowerCase()] = { estimatedPrice: i.estimatedPrice, essential: !!i.essential };
             });

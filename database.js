@@ -1,11 +1,76 @@
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import { createClient } from '@libsql/client';
+import 'dotenv/config';
+
+/* ===================== TURSO (libSQL) =====================
+   Replaces local SQLite so data survives Render's ephemeral filesystem —
+   Render wipes any local file (like the old kai_kitchen.db) on every
+   redeploy, restart, or free-tier spin-down. Turso is SQLite-compatible
+   but lives on Turso's servers instead of your app's disk, and its free
+   tier doesn't expire.
+
+   Setup (one time):
+     1. npm install -g turso-cli   (or use the Turso web dashboard instead)
+     2. turso auth signup
+     3. turso db create kai-kitchen
+     4. turso db show kai-kitchen --url          -> TURSO_DATABASE_URL
+     5. turso db tokens create kai-kitchen        -> TURSO_AUTH_TOKEN
+     6. Put both in your .env (and in Render's Environment settings).
+
+   If TURSO_DATABASE_URL isn't set, this falls back to a local file named
+   kai_kitchen.db — handy for local development, but remember that will
+   NOT persist on Render's free tier. Always set the Turso env vars for
+   anything you deploy.
+============================================================== */
+
+let clientInstance = null;
+
+function getClient() {
+    if (!clientInstance) {
+        const url = process.env.TURSO_DATABASE_URL || 'file:./kai_kitchen.db';
+        const authToken = process.env.TURSO_AUTH_TOKEN || undefined;
+
+        if (url.startsWith('file:')) {
+            console.warn("⚠️ TURSO_DATABASE_URL is not set — using a local SQLite file. This will NOT persist on Render's free tier. Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in your .env for production.");
+        }
+
+        clientInstance = createClient({ url, authToken });
+    }
+    return clientInstance;
+}
+
+/**
+ * Thin wrapper that mimics the old `sqlite` package's db.get/all/run/exec
+ * API, backed by @libsql/client. This is the only reason server.js didn't
+ * need to be rewritten when swapping databases.
+ */
+function wrapClient(client) {
+    return {
+        async get(sql, params = []) {
+            const result = await client.execute({ sql, args: params });
+            return result.rows[0] || undefined;
+        },
+        async all(sql, params = []) {
+            const result = await client.execute({ sql, args: params });
+            return result.rows;
+        },
+        async run(sql, params = []) {
+            const result = await client.execute({ sql, args: params });
+            return {
+                lastID: result.lastInsertRowid !== undefined && result.lastInsertRowid !== null
+                    ? Number(result.lastInsertRowid)
+                    : undefined,
+                changes: result.rowsAffected
+            };
+        },
+        async exec(sql) {
+            // Handles either a single statement or several separated by ';'.
+            await client.executeMultiple(sql);
+        }
+    };
+}
 
 export async function getDbConnection() {
-    return open({
-        filename: './kai_kitchen.db',
-        driver: sqlite3.Database
-    });
+    return wrapClient(getClient());
 }
 
 export async function initDatabase() {
@@ -28,8 +93,8 @@ export async function initDatabase() {
         )
     `);
 
-    // 1. Create Pantry table (storage + user_id included so fresh installs
-    //    don't need the ALTER TABLE migrations at all)
+    // 1. Pantry table (storage + user_id included so fresh installs don't
+    //    need the ALTER TABLE migrations at all)
     await db.exec(`
         CREATE TABLE IF NOT EXISTS pantry (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +107,7 @@ export async function initDatabase() {
         )
     `);
 
-    // 2. Create Recipe History Table
+    // 2. Recipe History Table
     await db.exec(`
         CREATE TABLE IF NOT EXISTS history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,10 +118,7 @@ export async function initDatabase() {
         )
     `);
 
-    // 3. Recipe step logs — used by "Cook Again" / the flashcard cooking
-    //    modal. This table was never created anywhere, which crashed both
-    //    /api/history (finishing a recipe) and signup (which tries to claim
-    //    pre-existing rows in every table, including this one).
+    // 3. Recipe step logs — used by "Cook Again" / the flashcard cooking modal.
     await db.exec(`
         CREATE TABLE IF NOT EXISTS recipe_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,8 +131,7 @@ export async function initDatabase() {
         )
     `);
 
-    // 3b. Daily macro/nutrition log — the entire Macros tab (log food, AI
-    //     estimate, goals) reads/writes this table, but it was never created.
+    // 3b. Daily macro/nutrition log — the Macros tab (log food, AI estimate, goals).
     await db.exec(`
         CREATE TABLE IF NOT EXISTS daily_macros (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,9 +145,7 @@ export async function initDatabase() {
         )
     `);
 
-    // 🛒 4. Shopping List Table — category/is_essential/is_checked/price were
-    //    referenced throughout server.js but never actually existed as
-    //    columns, so every insert/update against them failed silently.
+    // 4. Shopping List Table
     await db.exec(`
         CREATE TABLE IF NOT EXISTS shopping_list (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +172,7 @@ export async function initDatabase() {
 
     // Seed demo values if database is fresh
     const countResult = await db.get("SELECT COUNT(*) as count FROM pantry");
-    if (countResult.count === 0) {
+    if (Number(countResult.count) === 0) {
         const today = new Date();
 
         const expiredDate = new Date();
