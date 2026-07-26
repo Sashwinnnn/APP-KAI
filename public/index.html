@@ -1878,6 +1878,27 @@
             updateNotificationTray();
         }
 
+        function dispatchAutomaticNativeNotifications(alerts) {
+            if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+            alerts.forEach(alert => {
+                const key = `kai_auto_notified_${alert.id}_${alert.type}_${alert.expiry_date || ''}`;
+                const lastNotified = localStorage.getItem(key);
+                const now = Date.now();
+
+                // Dispatch native notification to system notification center if not notified in the last 12 hours
+                if (!lastNotified || (now - parseInt(lastNotified, 10)) > 12 * 60 * 60 * 1000) {
+                    localStorage.setItem(key, now.toString());
+
+                    showNativeNotification(alert.title, {
+                        body: `${alert.desc} Tap to prepare flashcard cooking deck!`,
+                        tag: `kai-auto-${alert.id}`,
+                        itemName: alert.name
+                    });
+                }
+            });
+        }
+
         function updateNotificationTray(forceCleared = false) {
             const container = document.getElementById('tray-items-container');
             const dot = document.getElementById('notification-dot');
@@ -1901,6 +1922,7 @@
                         alerts.push({
                             id: i.id,
                             name: i.name,
+                            expiry_date: i.expiry_date,
                             type: 'expired',
                             icon: '🚨',
                             title: `${i.name} Expired`,
@@ -1910,6 +1932,7 @@
                         alerts.push({
                             id: i.id,
                             name: i.name,
+                            expiry_date: i.expiry_date,
                             type: 'soon',
                             icon: '⚠️',
                             title: `${i.name} Expiring Soon`,
@@ -1917,6 +1940,10 @@
                         });
                     }
                 });
+            }
+
+            if (!forceCleared && alerts.length > 0) {
+                dispatchAutomaticNativeNotifications(alerts);
             }
 
             if (dot) {
@@ -1940,13 +1967,10 @@
                     <div class="glass-panel p-3 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 flex items-center justify-between gap-2 mb-3">
                         <div class="min-w-0 flex-1">
                             <p class="font-bold text-emerald-300 text-xs flex items-center gap-1.5">
-                                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span> Notifications Enabled
+                                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span> Automatic Background Alerts Active
                             </p>
-                            <p class="text-[10px] text-slate-400 truncate">PWA & browser alerts active</p>
+                            <p class="text-[10px] text-slate-400 truncate">Device & system push notifications enabled</p>
                         </div>
-                        <button onclick="sendTestPushNotification()" class="bg-white/10 hover:bg-white/20 text-white border border-white/15 px-3 py-1.5 rounded-xl text-[10px] font-bold transition active:scale-95 shrink-0">
-                            Test Alert
-                        </button>
                     </div>
                 `;
             }
@@ -2139,32 +2163,12 @@
                     }
                 }
 
-                showCustomAlert("Notifications enabled! A native test alert was popped on your device.", "Notifications Active", "🔔");
+                showCustomAlert("Notifications active! KAI will automatically send background alerts to your device whenever food is expiring.", "Notifications Active", "🔔");
                 updateNotificationTray();
 
             } catch (err) {
                 console.error("Error enabling notifications:", err);
                 showCustomAlert(`Error enabling notifications: ${err.message}`, "Notification Error", "⚠️");
-            }
-        }
-
-        async function sendTestPushNotification() {
-            const popped = await showNativeNotification("KAI Expiration Alert! 🚨", {
-                body: "Organic Milk expires tomorrow! Tap to open flashcard cooking deck.",
-                tag: "pantry-test-alert",
-                itemName: "Organic Milk"
-            });
-
-            try {
-                const res = await authFetch('/api/push/send-test', { method: 'POST' });
-                const data = await res.json();
-                if (res.ok) {
-                    showCustomAlert("Test notification popped! Tap it to open KAI's flashcard recipe generator.", "Notification Dispatched", "🚀");
-                } else {
-                    showCustomAlert(popped ? "Native notification popped! Tap it to open flashcard recipe." : (data.error || "Failed to trigger push."), "Notification Status", "📱");
-                }
-            } catch (err) {
-                showCustomAlert(popped ? "Native notification popped! Tap it to open flashcard recipe." : "Network error contacting server.", "Notification Status", "📱");
             }
         }
 
@@ -2635,6 +2639,20 @@
             });
             document.getElementById('shopping-price-input')?.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') addShoppingItem();
+            });
+
+            // Auto-check pantry expirations every 60 seconds to push alerts to device notification center
+            setInterval(() => {
+                if (Array.isArray(currentPantryItems) && currentPantryItems.length > 0) {
+                    checkPantryExpirations();
+                }
+            }, 60000);
+
+            // Re-fetch and trigger native notifications whenever user returns or unlocks device
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                    fetchPantryItems();
+                }
             });
         }
 
