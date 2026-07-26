@@ -6,9 +6,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "build": "echo 'Build complete'"
   },
   "dependencies": {
+    "@google/genai": "^2.13.0",
     "@libsql/client": "^0.14.0",
     "dotenv": "^16.4.2",
     "express": "^4.21.2",
