@@ -418,6 +418,8 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ error: "Username and password are required." });
         }
 
+        await initDatabase();
+
         const db = await getDbConnection();
         const user = await db.get("SELECT * FROM users WHERE username = ? COLLATE NOCASE", [username.trim()]);
         if (!user) {
