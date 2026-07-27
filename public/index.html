@@ -631,6 +631,48 @@
         </div>
     </div>
 
+    <!-- EXPIRED ITEM CONFIRMATION MODAL -->
+    <div id="expiredItemModal" class="modal-backdrop hidden z-[120]">
+        <div class="modal-card max-w-sm space-y-4">
+            <div class="flex justify-between items-center border-b border-rose-500/20 pb-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">🚨</span>
+                    <div>
+                        <h2 class="text-white font-bold text-base">This Item Has Expired</h2>
+                        <p class="text-[10px] text-rose-300">Pantry Expiration Notice</p>
+                    </div>
+                </div>
+                <button onclick="closeExpiredItemModal()" class="text-slate-400 hover:text-white text-sm p-1">✕</button>
+            </div>
+
+            <div class="glass-panel p-3.5 rounded-2xl border border-rose-500/20 bg-rose-500/5 space-y-2">
+                <div class="flex justify-between items-start">
+                    <h3 id="expiredModalItemName" class="font-bold text-sm text-white">Item Name</h3>
+                    <span id="expiredModalBadge" class="bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-bold px-2 py-0.5 rounded-full">Expired</span>
+                </div>
+                <div class="text-xs text-slate-300 space-y-1 pt-1 border-t border-white/5">
+                    <p id="expiredModalDate" class="text-slate-400">Expiration Date: <span class="text-white font-medium">--</span></p>
+                    <p id="expiredModalDaysAgo" class="text-rose-400 font-medium">Expired 0 days ago</p>
+                    <p id="expiredModalStorage" class="text-slate-400">Location: <span class="text-white font-medium">--</span></p>
+                </div>
+            </div>
+
+            <p class="text-xs text-slate-300 leading-relaxed">
+                This item has passed its expiration date and may no longer be safe or fresh. Would you like to remove it from your pantry inventory?
+            </p>
+
+            <div class="flex justify-end gap-2 pt-3 border-t border-white/10">
+                <button onclick="closeExpiredItemModal()" class="px-4 py-2.5 text-xs text-slate-400 hover:text-white transition rounded-xl font-medium">
+                    Keep / Dismiss
+                </button>
+                <button id="btnRemoveExpiredItem" onclick="confirmDeleteExpiredItem()" class="bg-rose-500 hover:bg-rose-600 text-white border border-rose-400/30 px-4 py-2.5 rounded-xl text-xs font-bold transition active:scale-95 shadow-lg flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    Remove from Pantry
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- ENHANCED INTERACTIVE FLASHCARD COOKING MODAL -->
     <div id="recipeModal" class="modal-backdrop hidden">
         <div class="modal-card max-w-md min-h-[380px] flex flex-col justify-between">
@@ -1878,6 +1920,124 @@
             updateNotificationTray();
         }
 
+        let pendingExpiredItemId = null;
+
+        function promptRemoveExpiredItemByName(itemName) {
+            if (!itemName) return;
+            
+            const tray = document.getElementById('notification-tray');
+            if (tray && !tray.classList.contains('hidden')) {
+                tray.classList.add('hidden');
+            }
+
+        let pendingExpiredItemId = null;
+        let pendingExpiredItemName = null;
+
+        function promptRemoveExpiredItemByName(itemName) {
+            if (!itemName) return;
+            const tray = document.getElementById('notification-tray');
+            if (tray && !tray.classList.contains('hidden')) {
+                tray.classList.add('hidden');
+            }
+
+            let item = null;
+            if (Array.isArray(currentPantryItems)) {
+                item = currentPantryItems.find(i => i.name.toLowerCase() === itemName.toLowerCase()) || 
+                       currentPantryItems.find(i => i.name.toLowerCase().includes(itemName.toLowerCase()));
+            }
+
+            if (item) {
+                openExpiredItemModal(item);
+            } else {
+                openExpiredItemModal({
+                    id: null,
+                    name: itemName,
+                    expiry_date: 'Expired',
+                    storage: 'Pantry'
+                });
+            }
+        }
+
+        function promptRemoveExpiredItem(itemId) {
+            const item = Array.isArray(currentPantryItems) ? currentPantryItems.find(i => i.id == itemId) : null;
+            if (item) {
+                openExpiredItemModal(item);
+            } else {
+                showCustomAlert("Item not found in pantry inventory.", "Notice", "ℹ️");
+            }
+        }
+
+        function openExpiredItemModal(item) {
+            pendingExpiredItemId = item ? item.id : null;
+            pendingExpiredItemName = item ? item.name : null;
+            
+            const nameEl = document.getElementById('expiredModalItemName');
+            const dateEl = document.getElementById('expiredModalDate');
+            const daysAgoEl = document.getElementById('expiredModalDaysAgo');
+            const storageEl = document.getElementById('expiredModalStorage');
+
+            if (nameEl) nameEl.innerText = item.name || 'Expired Item';
+            if (dateEl) dateEl.innerHTML = `Expiration Date: <span class="text-white font-medium">${item.expiry_date || 'Passed'}</span>`;
+            if (storageEl) storageEl.innerHTML = `Location & Qty: <span class="text-white font-medium">${item.storage || 'Pantry'} • ${item.quantity || '1'}</span>`;
+
+            let daysDiffText = "Passed expiration date";
+            if (item.expiry_date && item.expiry_date !== 'Expired') {
+                const parts = item.expiry_date.split('-');
+                if (parts.length >= 3) {
+                    const exp = new Date(parts[0], parts[1] - 1, parts[2]);
+                    exp.setHours(0, 0, 0, 0);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const diffDays = Math.round((today - exp) / (1000 * 60 * 60 * 24));
+                    if (diffDays > 0) {
+                        daysDiffText = `Expired ${diffDays} day${diffDays === 1 ? '' : 's'} ago (${item.expiry_date})`;
+                    } else if (diffDays === 0) {
+                        daysDiffText = `Expired today (${item.expiry_date})`;
+                    }
+                }
+            }
+            if (daysAgoEl) daysAgoEl.innerText = daysDiffText;
+
+            const modal = document.getElementById('expiredItemModal');
+            if (modal) modal.classList.remove('hidden');
+        }
+
+        function closeExpiredItemModal() {
+            const modal = document.getElementById('expiredItemModal');
+            if (modal) modal.classList.add('hidden');
+            pendingExpiredItemId = null;
+            pendingExpiredItemName = null;
+        }
+
+        async function confirmDeleteExpiredItem() {
+            const itemId = pendingExpiredItemId;
+            const itemName = pendingExpiredItemName;
+            closeExpiredItemModal();
+
+            try {
+                if (itemId) {
+                    const res = await authFetch(`/api/pantry/${itemId}`, { method: 'DELETE' });
+                    if (res.ok) {
+                        fetchPantryItems();
+                        showCustomAlert(`${itemName || 'Expired item'} removed from your pantry.`, "Item Removed", "🗑️");
+                    }
+                } else if (itemName) {
+                    const res = await authFetch('/api/pantry');
+                    if (res.ok) {
+                        const items = await res.json();
+                        const found = items.find(i => i.name.toLowerCase() === itemName.toLowerCase());
+                        if (found) {
+                            await authFetch(`/api/pantry/${found.id}`, { method: 'DELETE' });
+                            fetchPantryItems();
+                            showCustomAlert(`${itemName} removed from your pantry.`, "Item Removed", "🗑️");
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("Error removing expired item:", err);
+            }
+        }
+
         function dispatchAutomaticNativeNotifications(alerts) {
             if (!('Notification' in window) || Notification.permission !== 'granted') return;
 
@@ -1886,15 +2046,34 @@
                 const lastNotified = localStorage.getItem(key);
                 const now = Date.now();
 
-                // Dispatch native notification to system notification center if not notified in the last 12 hours
                 if (!lastNotified || (now - parseInt(lastNotified, 10)) > 12 * 60 * 60 * 1000) {
                     localStorage.setItem(key, now.toString());
 
-                    showNativeNotification(alert.title, {
-                        body: `${alert.desc} Tap to prepare flashcard cooking deck!`,
-                        tag: `kai-auto-${alert.id}`,
-                        itemName: alert.name
-                    });
+                    if (alert.type === 'expired') {
+                        showNativeNotification(`🚨 ${alert.name} Expired`, {
+                            body: `${alert.name} expired on ${alert.expiry_date}. Tap to review and remove from pantry.`,
+                            tag: `kai-auto-${alert.id}`,
+                            itemName: alert.name,
+                            actionType: 'expired',
+                            data: {
+                                itemName: alert.name,
+                                actionType: 'expired',
+                                url: `/?expiredItem=${encodeURIComponent(alert.name)}`
+                            }
+                        });
+                    } else {
+                        showNativeNotification(`⚠️ ${alert.name} Expiring Soon`, {
+                            body: `${alert.name} expires soon (${alert.expiry_date}). Tap to cook before it spoils!`,
+                            tag: `kai-auto-${alert.id}`,
+                            itemName: alert.name,
+                            actionType: 'cook',
+                            data: {
+                                itemName: alert.name,
+                                actionType: 'cook',
+                                url: `/?cookItem=${encodeURIComponent(alert.name)}`
+                            }
+                        });
+                    }
                 }
             });
         }
@@ -1926,7 +2105,7 @@
                             type: 'expired',
                             icon: '🚨',
                             title: `${i.name} Expired`,
-                            desc: `Expired ${Math.abs(diffDays)} day(s) ago (${i.expiry_date}). Delete or replace.`
+                            desc: `Expired on ${i.expiry_date} (${Math.abs(diffDays)} day(s) ago). Tap to review or remove.`
                         });
                     } else if (diffDays <= 3) {
                         alerts.push({
@@ -1988,20 +2167,20 @@
             }
 
             container.innerHTML = pushStatusHTML + alerts.map(a => `
-                <div class="glass-panel p-3 rounded-2xl border border-white/10 bg-white/[0.02] flex items-start justify-between gap-3 animate-fade-in mb-2">
+                <div onclick="${a.type === 'soon' ? `cookExpiringItemDirectly('${a.name.replace(/'/g, "\\'")}')` : `promptRemoveExpiredItemByName('${a.name.replace(/'/g, "\\'")}')`}" class="glass-panel p-3 rounded-2xl border ${a.type === 'soon' ? 'border-amber-500/20 bg-amber-500/5 hover:bg-amber-500/10' : 'border-rose-500/20 bg-rose-500/5 hover:bg-rose-500/10'} flex items-start justify-between gap-3 animate-fade-in mb-2 cursor-pointer transition">
                     <div class="flex items-start gap-2.5 min-w-0">
                         <span class="text-lg shrink-0 mt-0.5">${a.icon}</span>
                         <div class="min-w-0">
                             <p class="font-bold text-white text-xs truncate">${a.title}</p>
-                            <p class="text-[10px] text-slate-400 leading-snug mt-0.5">${a.desc}</p>
+                            <p class="text-[10px] text-slate-300 leading-snug mt-0.5">${a.desc}</p>
                         </div>
                     </div>
                     ${a.type === 'soon' ? `
-                        <button onclick="cookExpiringItemDirectly('${a.name.replace(/'/g, "\\'")}')" class="shrink-0 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition active:scale-95">
+                        <button onclick="event.stopPropagation(); cookExpiringItemDirectly('${a.name.replace(/'/g, "\\'")}')" class="shrink-0 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition active:scale-95">
                             Cook
                         </button>
                     ` : `
-                        <button onclick="removeItemFromAlert(${a.id})" class="shrink-0 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition active:scale-95">
+                        <button onclick="event.stopPropagation(); promptRemoveExpiredItemByName('${a.name.replace(/'/g, "\\'")}')" class="shrink-0 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition active:scale-95">
                             Remove
                         </button>
                     `}
@@ -2070,10 +2249,7 @@
         }
 
         function removeItemFromAlert(itemId) {
-            showCustomConfirm("Remove expired item from pantry?", async () => {
-                await authFetch(`/api/pantry/${itemId}`, { method: 'DELETE' });
-                fetchPantryItems();
-            }, "Remove Item");
+            promptRemoveExpiredItem(itemId);
         }
 
         async function showNativeNotification(title, options = {}) {
@@ -2085,6 +2261,8 @@
             }
 
             const itemName = options.itemName || 'Organic Milk';
+            const actionType = options.actionType || (options.data && options.data.actionType) || 'cook';
+            const targetUrl = options.data && options.data.url ? options.data.url : (actionType === 'expired' ? `/?expiredItem=${encodeURIComponent(itemName)}` : `/?cookItem=${encodeURIComponent(itemName)}`);
 
             const defaultOpts = {
                 icon: '/icons/icon-192.png',
@@ -2092,7 +2270,8 @@
                 vibrate: [200, 100, 200],
                 data: {
                     itemName: itemName,
-                    url: `/?cookItem=${encodeURIComponent(itemName)}`
+                    actionType: actionType,
+                    url: targetUrl
                 },
                 ...options
             };
@@ -2113,7 +2292,11 @@
                 const notif = new Notification(title, defaultOpts);
                 notif.onclick = function() {
                     window.focus();
-                    cookExpiringItemDirectly(itemName);
+                    if (actionType === 'expired') {
+                        promptRemoveExpiredItemByName(itemName);
+                    } else {
+                        cookExpiringItemDirectly(itemName);
+                    }
                     notif.close();
                 };
                 return true;
@@ -2663,7 +2846,9 @@
         // 1. Listen for notification clicks if the app is already open
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.addEventListener('message', (event) => {
-                if (event.data && event.data.type === 'COOK_EXPIRING_ITEM') {
+                if (event.data && (event.data.type === 'ITEM_EXPIRED_ALERT' || event.data.type === 'DELETE_EXPIRED_ITEM')) {
+                    promptRemoveExpiredItemByName(event.data.itemName || event.data.item);
+                } else if (event.data && event.data.type === 'COOK_EXPIRING_ITEM') {
                     cookExpiringItemDirectly(event.data.itemName || 'Organic Milk');
                 } else if (event.data && event.data.type === 'OPEN_RECIPE_MODAL') {
                     triggerRecipeModal(event.data.recipeId);
@@ -2671,11 +2856,20 @@
             });
         }
 
-        // 2. Open modal lock & recipe generator if app opened fresh from notification link
+        // 2. Open confirmation or recipe modal if app opened fresh from deep link
         window.addEventListener('DOMContentLoaded', () => {
             const urlParams = new URLSearchParams(window.location.search);
+            const expiredItem = urlParams.get('expiredItem') || urlParams.get('deleteItem');
             const cookItem = urlParams.get('cookItem');
-            if (cookItem) {
+            const action = urlParams.get('action');
+
+            if (expiredItem || action === 'delete') {
+                const target = expiredItem || cookItem;
+                window.history.replaceState({}, document.title, window.location.pathname);
+                setTimeout(() => {
+                    promptRemoveExpiredItemByName(target);
+                }, 500);
+            } else if (cookItem || action === 'cook') {
                 window.history.replaceState({}, document.title, window.location.pathname);
                 setTimeout(() => {
                     cookExpiringItemDirectly(cookItem);
