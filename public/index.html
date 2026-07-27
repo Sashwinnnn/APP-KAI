@@ -1921,16 +1921,6 @@
         }
 
         let pendingExpiredItemId = null;
-
-        function promptRemoveExpiredItemByName(itemName) {
-            if (!itemName) return;
-            
-            const tray = document.getElementById('notification-tray');
-            if (tray && !tray.classList.contains('hidden')) {
-                tray.classList.add('hidden');
-            }
-
-        let pendingExpiredItemId = null;
         let pendingExpiredItemName = null;
 
         function promptRemoveExpiredItemByName(itemName) {
