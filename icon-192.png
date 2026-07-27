@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "com.onrender.app_kai.twa",
+        "sha256_cert_fingerprints": ["BF:41:B3:14:B9:17:F5:80:F5:7F:55:88:91:FF:31:7D:E3:84:F6:8E:B8:28:C5:4A:5D:C2:12:FD:79:EF:AD:81"]
+      }
+    }]
