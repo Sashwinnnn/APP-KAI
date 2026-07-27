@@ -1544,15 +1544,22 @@ async function checkAndSendBackgroundExpirationPushes() {
                 let notifType = null;
                 let title = "";
                 let body = "";
+                let action = "cook";
+                let url = "";
 
                 if (diffDays < 0) {
                     notifType = 'expired';
-                    title = `KAI Expiration Alert: ${item.name} Expired! 🚨`;
-                    body = `${item.name} expired on ${item.expiry_date}. Tap to cook before discarding!`;
+                    title = `KAI Expiration Alert: ${item.name} Has Expired! 🚨`;
+                    const absDays = Math.abs(diffDays);
+                    body = `${item.name} expired on ${item.expiry_date} (${absDays} day${absDays > 1 ? 's' : ''} ago). Tap to review and remove from pantry.`;
+                    action = 'delete';
+                    url = `/?action=delete&deleteItem=${encodeURIComponent(item.name)}`;
                 } else if (diffDays <= 1) {
                     notifType = 'expiring_soon';
                     title = `KAI Expiration Alert: ${item.name} Expiring Soon! ⚠️`;
                     body = `${item.name} expires ${diffDays === 0 ? 'today' : 'tomorrow'}. Tap to generate a flashcard recipe deck!`;
+                    action = 'cook';
+                    url = `/?action=cook&cookItem=${encodeURIComponent(item.name)}`;
                 }
 
                 if (notifType) {
@@ -1566,7 +1573,8 @@ async function checkAndSendBackgroundExpirationPushes() {
                             title: title,
                             body: body,
                             itemName: item.name,
-                            url: `/?cookItem=${encodeURIComponent(item.name)}`
+                            action: action,
+                            url: url
                         });
 
                         const pushSub = {
@@ -1599,6 +1607,16 @@ async function checkAndSendBackgroundExpirationPushes() {
 
 // Background scheduler — runs every 60 seconds
 setInterval(checkAndSendBackgroundExpirationPushes, 60000);
+
+// Endpoint for external cron services (e.g., cron-job.org / Render ping)
+app.get('/api/cron/check-expirations', async (req, res) => {
+    try {
+        await checkAndSendBackgroundExpirationPushes();
+        res.json({ success: true, message: "Background expiration check executed." });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 // Listener Setup
 app.listen(PORT, '0.0.0.0', () => {
