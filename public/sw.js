@@ -62,20 +62,28 @@ self.addEventListener('push', (event) => {
     try {
         data = event.data ? event.data.json() : {};
     } catch(e) {
-        data = { title: 'Expiring Ingredient Alert!', body: event.data.text() };
+        data = { title: 'Kitchen Alert!', body: event.data.text() };
     }
     
-    const title = data.title || 'Ingredient Expiring Soon!';
     const itemName = data.itemName || data.item || 'Organic Milk';
+    const isExpired = (data.action === 'delete') || (data.actionType === 'expired') || (data.url && (data.url.includes('delete') || data.url.includes('expired')));
+    const actionType = isExpired ? 'expired' : 'cook';
+    
+    let defaultTitle = isExpired ? `KAI Expiration Alert: ${itemName} Has Expired! 🚨` : `KAI Expiration Alert: ${itemName} Expiring Soon! ⚠️`;
+    let defaultBody = isExpired ? `${itemName} has passed its expiry date. Tap to review and remove from pantry.` : `${itemName} expires soon. Tap to generate a flashcard recipe deck!`;
+    let defaultUrl = isExpired ? `/?action=delete&deleteItem=${encodeURIComponent(itemName)}` : `/?action=cook&cookItem=${encodeURIComponent(itemName)}`;
+
+    const title = data.title || defaultTitle;
     
     const options = {
-        body: data.body || 'Tap to cook a recipe before it spoils!',
+        body: data.body || defaultBody,
         icon: '/icons/icon-192.png',
         badge: '/icons/icon-192.png',
         vibrate: [100, 50, 100],
         data: {
             itemName: itemName,
-            url: `/?cookItem=${encodeURIComponent(itemName)}`
+            actionType: actionType,
+            url: data.url || defaultUrl
         }
     };
 
@@ -89,7 +97,10 @@ self.addEventListener('notificationclick', (event) => {
 
     const notificationData = event.notification ? (event.notification.data || {}) : {};
     const itemName = notificationData.itemName || 'Organic Milk';
-    const targetUrl = notificationData.url || `/?cookItem=${encodeURIComponent(itemName)}`;
+    const isExpired = (notificationData.actionType === 'expired') || (notificationData.url && (notificationData.url.includes('delete') || notificationData.url.includes('expired')));
+    
+    const targetUrl = notificationData.url || (isExpired ? `/?action=delete&deleteItem=${encodeURIComponent(itemName)}` : `/?action=cook&cookItem=${encodeURIComponent(itemName)}`);
+    const msgType = isExpired ? 'ITEM_EXPIRED_ALERT' : 'COOK_EXPIRING_ITEM';
 
     event.waitUntil(
         clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
@@ -97,7 +108,7 @@ self.addEventListener('notificationclick', (event) => {
                 if ('focus' in client) {
                     client.focus();
                     client.postMessage({
-                        type: 'COOK_EXPIRING_ITEM',
+                        type: msgType,
                         itemName: itemName
                     });
                     return;
