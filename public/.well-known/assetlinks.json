@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.kai",
+      "sha256_cert_fingerprints": [
+        "88:28:91:D3:97:95:01:F5:51:9F:60:49:C7:01:07:4F:51:F8:38:CA:93:56:1E:5D:46:20:DD:01:5C:BA:45:67"
+      ]
+    }
+  }
+]
