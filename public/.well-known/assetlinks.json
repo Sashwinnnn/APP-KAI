@@ -4,9 +4,8 @@
     "target": {
       "namespace": "android_app",
       "package_name": "app.kai",
-      "sha256_cert_fingerprints": [
-        "88:28:91:D3:97:95:01:F5:51:9F:60:49:C7:01:07:4F:51:F8:38:CA:93:56:1E:5D:46:20:DD:01:5C:BA:45:67"
-      ]
+      "sha256_cert_fingerprints":
+        ["C9:9A:83:35:6F:12:45:C8:46:30:94:63:ED:FD:90:B9:B2:FC:53:4A:95:96:84:7A:C9:DA:FB:BD:B6:3D:26:EE"]
     }
   }
 ]
